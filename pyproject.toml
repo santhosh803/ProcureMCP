@@ -17,6 +17,7 @@ dependencies = [
     "google-cloud-aiplatform>=1.165.0",
     "gunicorn>=26.1.0",
     "langchain-google-vertexai>=3.2.4",
+    "mcp>=2.0.0",
     "pgvector>=0.5.0",
     "psycopg[binary]>=3.3.4",
     "python-dotenv>=1.2.3",

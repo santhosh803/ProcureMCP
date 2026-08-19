@@ -8,7 +8,11 @@ anyio==4.14.2
     # via
     #   google-genai
     #   httpx
+    #   httpx2
     #   langsmith
+    #   mcp
+    #   sse-starlette
+    #   starlette
 asgiref==3.12.1
     # via
     #   django
@@ -41,6 +45,7 @@ click==8.4.2
     #   click-didyoumean
     #   click-plugins
     #   click-repl
+    #   uvicorn
 click-didyoumean==0.3.1
     # via celery
 click-plugins==1.1.1.2
@@ -50,7 +55,9 @@ click-repl==0.3.0
 colorama==0.4.6 ; sys_platform == 'win32'
     # via click
 cryptography==50.0.0
-    # via google-auth
+    # via
+    #   google-auth
+    #   pyjwt
 distro==1.9.0
     # via
     #   google-genai
@@ -159,9 +166,14 @@ grpcio-status==1.83.0
 gunicorn==26.1.0
     # via procuremcp
 h11==0.16.0
-    # via httpcore
+    # via
+    #   httpcore
+    #   httpcore2
+    #   uvicorn
 httpcore==1.0.9
     # via httpx
+httpcore2==2.12.0 ; sys_platform != 'emscripten'
+    # via httpx2
 httpx==0.28.1
     # via
     #   google-genai
@@ -170,10 +182,15 @@ httpx==0.28.1
     #   langsmith
 httpx-sse==0.4.3
     # via langchain-google-vertexai
+httpx2==2.12.0
+    # via mcp
+httpx2-jsfetch==1.0 ; python_full_version >= '3.12' and sys_platform == 'emscripten'
+    # via httpx2
 idna==3.19
     # via
     #   anyio
     #   httpx
+    #   httpx2
     #   requests
 inflection==0.5.1
     # via drf-spectacular
@@ -182,7 +199,9 @@ jsonpatch==1.33
 jsonpointer==3.1.1
     # via jsonpatch
 jsonschema==4.26.0
-    # via drf-spectacular
+    # via
+    #   drf-spectacular
+    #   mcp
 jsonschema-specifications==2025.9.1
     # via jsonschema
 kombu==5.6.2
@@ -195,6 +214,10 @@ langchain-protocol==0.0.18
     # via langchain-core
 langsmith==0.11.1
     # via langchain-core
+mcp==2.0.0
+    # via procuremcp
+mcp-types==2.0.0
+    # via mcp
 numexpr==2.14.1 ; python_full_version < '3.11'
     # via langchain-google-vertexai
 numexpr==2.14.2 ; python_full_version >= '3.11'
@@ -211,6 +234,8 @@ numpy==2.5.2 ; python_full_version >= '3.12'
     # via
     #   bottleneck
     #   numexpr
+opentelemetry-api==1.44.0
+    # via mcp
 orjson==3.12.0 ; platform_python_implementation != 'PyPy'
     # via langsmith
 packaging==26.3
@@ -259,14 +284,22 @@ pydantic==2.13.4
     #   langchain-core
     #   langchain-google-vertexai
     #   langsmith
+    #   mcp
+    #   mcp-types
 pydantic-core==2.46.4
     # via pydantic
+pyjwt==2.13.0
+    # via mcp
 python-dateutil==2.9.0.post0
     # via
     #   celery
     #   google-cloud-bigquery
 python-dotenv==1.2.3
     # via procuremcp
+python-multipart==0.0.32
+    # via mcp
+pywin32==312 ; sys_platform == 'win32'
+    # via mcp
 pyyaml==6.0.3
     # via
     #   drf-spectacular
@@ -304,10 +337,20 @@ sniffio==1.3.1
     #   langsmith
 sqlparse==0.6.0
     # via django
+sse-starlette==3.4.8
+    # via mcp
+starlette==1.6.0
+    # via
+    #   mcp
+    #   sse-starlette
 tenacity==9.1.4
     # via
     #   google-genai
     #   langchain-core
+truststore==0.10.4 ; sys_platform != 'emscripten'
+    # via
+    #   httpcore2
+    #   httpx2
 typing-extensions==4.16.0
     # via
     #   anyio
@@ -317,16 +360,25 @@ typing-extensions==4.16.0
     #   google-cloud-aiplatform
     #   google-genai
     #   grpcio
+    #   httpx2
     #   langchain-core
     #   langchain-protocol
     #   langsmith
+    #   mcp
+    #   mcp-types
+    #   opentelemetry-api
     #   psycopg
     #   pydantic
     #   pydantic-core
+    #   pyjwt
     #   referencing
+    #   starlette
     #   typing-inspection
+    #   uvicorn
 typing-inspection==0.4.4
-    # via pydantic
+    # via
+    #   mcp
+    #   pydantic
 tzdata==2026.3
     # via
     #   django
@@ -344,6 +396,8 @@ uuid-utils==0.17.0
     # via
     #   langchain-core
     #   langsmith
+uvicorn==0.52.4 ; sys_platform != 'emscripten'
+    # via mcp
 validators==0.35.0
     # via langchain-google-vertexai
 vine==5.1.0

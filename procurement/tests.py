@@ -250,6 +250,69 @@ class PolicyRetrieverTests(TestCase):
         self.assertEqual(results, [])
 
 
+class MCPToolTests(TestCase):
+    """Cover the MCP tool primitives that do not require the embedding API."""
+
+    def setUp(self):
+        self.vendor = make_vendor()
+        self.material = make_material()
+
+    def test_query_material_master(self):
+        from mcp_server import tools
+
+        res = tools.query_material_master(self.material.material_number)
+        self.assertEqual(res["material_number"], self.material.material_number)
+        self.assertIn("reorder_needed", res)
+
+    def test_query_material_master_missing(self):
+        from mcp_server import tools
+
+        res = tools.query_material_master("NOPE-000")
+        self.assertIn("error", res)
+
+    def test_search_vendors_filters_by_group(self):
+        from mcp_server import tools
+
+        res = tools.search_vendors(material_group="raw_materials", min_score=0.0)
+        self.assertGreaterEqual(res["count"], 1)
+        self.assertEqual(res["vendors"][0]["vendor_code"], self.vendor.vendor_code)
+
+    def test_evaluate_vendor_scorecard_and_flags(self):
+        from mcp_server import tools
+
+        res = tools.evaluate_vendor(self.vendor.vendor_code)
+        self.assertIn("scorecard", res)
+        self.assertIn("recommendation", res)
+
+    def test_create_requisition_and_route(self):
+        from mcp_server import tools
+
+        pr = tools.create_purchase_requisition(
+            requester="agent@procuremcp.example",
+            cost_center="CC-1500",
+            justification="Restock",
+            line_items=[{"material_number": self.material.material_number, "quantity": 10}],
+        )
+        self.assertEqual(pr["status"], "draft")
+        self.assertIn("pr_number", pr)
+
+        routed = tools.route_for_approval(
+            "purchase_requisition", pr["pr_number"], 60000, is_sole_source=True
+        )
+        self.assertTrue(routed["hitl_pending"])
+        tiers = {a["approver_tier"] for a in routed["approval_requests"]}
+        self.assertIn("cfo", tiers)
+        self.assertIn("sole_source_committee", tiers)
+
+    def test_check_po_status_timeline(self):
+        from mcp_server import tools
+
+        po = make_po(self.vendor, total_value=Decimal("5000"))
+        res = tools.check_po_status(po.po_number)
+        self.assertEqual(res["po_number"], po.po_number)
+        self.assertIsInstance(res["timeline"], list)
+
+
 class ApprovalRoutingTests(TestCase):
     def test_tier_thresholds(self):
         from .approval_engine import tier_for_value
