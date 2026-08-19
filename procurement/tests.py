@@ -250,6 +250,25 @@ class PolicyRetrieverTests(TestCase):
         self.assertEqual(results, [])
 
 
+class AgentGraphBuildTests(TestCase):
+    """The orchestrator graph must compile without contacting any model."""
+
+    def test_graph_compiles_with_expected_nodes(self):
+        from agent.graph import build_graph
+
+        graph = build_graph()
+        nodes = set(graph.get_graph().nodes.keys())
+        for expected in ("retrieve_policy_context", "reason", "act", "hitl_check"):
+            self.assertIn(expected, nodes)
+
+    def test_local_tools_expose_ten_tools(self):
+        from agent.mcp_client import get_local_tools
+
+        tool_names = {t.name for t in get_local_tools()}
+        self.assertEqual(len(tool_names), 10)
+        self.assertIn("create_purchase_order", tool_names)
+
+
 class MCPToolTests(TestCase):
     """Cover the MCP tool primitives that do not require the embedding API."""
 
