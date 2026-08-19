@@ -1,6 +1,6 @@
 """DRF viewsets for the procurement API plus purchase-order lifecycle actions."""
 
-from django.utils import timezone
+from django_fsm import TransitionNotAllowed
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -69,48 +69,53 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
             return PurchaseOrderWriteSerializer
         return PurchaseOrderSerializer
 
-    def _actor(self, request):
-        if request.user and request.user.is_authenticated:
-            return request.user.get_username()
-        return "api:anonymous"
+    def _run_transition(self, request, transition_name, *, required_perm=None):
+        """Invoke a django-fsm transition and persist, returning a DRF Response."""
+        po = self.get_object()
+        if required_perm and not request.user.has_perm(required_perm):
+            return Response(
+                {"detail": "You do not have permission for this transition."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        method = getattr(po, transition_name)
+        try:
+            result = method()
+        except TransitionNotAllowed:
+            return Response(
+                {"detail": f"Cannot {transition_name} a PO in '{po.status}' state."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        po.save()
+        data = PurchaseOrderSerializer(po).data
+        if transition_name == "submit_for_approval" and result:
+            data["approvals_created"] = [
+                {"tier": a.approver_tier, "assigned_to": a.assigned_to} for a in result
+            ]
+        return Response(data)
+
+    @action(detail=True, methods=["post"])
+    def submit_for_approval(self, request, pk=None):
+        return self._run_transition(request, "submit_for_approval")
 
     @action(detail=True, methods=["post"])
     def approve(self, request, pk=None):
-        po = self.get_object()
-        if po.status != PurchaseOrder.Status.PENDING_APPROVAL:
-            return Response(
-                {"detail": f"Cannot approve a PO in '{po.status}' state."},
-                status=status.HTTP_409_CONFLICT,
-            )
-        po.status = PurchaseOrder.Status.APPROVED
-        po.approved_at = timezone.now()
-        po.save(update_fields=["status", "approved_at"])
-        return Response(PurchaseOrderSerializer(po).data)
+        return self._run_transition(
+            request, "approve", required_perm="procurement.change_purchaseorder"
+        )
+
+    @action(detail=True, methods=["post"])
+    def reject(self, request, pk=None):
+        return self._run_transition(
+            request, "reject", required_perm="procurement.change_purchaseorder"
+        )
 
     @action(detail=True, methods=["post"])
     def send_to_vendor(self, request, pk=None):
-        po = self.get_object()
-        if po.status != PurchaseOrder.Status.APPROVED:
-            return Response(
-                {"detail": f"Cannot send a PO in '{po.status}' state."},
-                status=status.HTTP_409_CONFLICT,
-            )
-        po.status = PurchaseOrder.Status.SENT_TO_VENDOR
-        po.sent_at = timezone.now()
-        po.save(update_fields=["status", "sent_at"])
-        return Response(PurchaseOrderSerializer(po).data)
+        return self._run_transition(request, "send_to_vendor")
 
     @action(detail=True, methods=["post"])
     def cancel(self, request, pk=None):
-        po = self.get_object()
-        if po.status in (PurchaseOrder.Status.CLOSED, PurchaseOrder.Status.CANCELLED):
-            return Response(
-                {"detail": f"Cannot cancel a PO in '{po.status}' state."},
-                status=status.HTTP_409_CONFLICT,
-            )
-        po.status = PurchaseOrder.Status.CANCELLED
-        po.save(update_fields=["status"])
-        return Response(PurchaseOrderSerializer(po).data)
+        return self._run_transition(request, "cancel")
 
 
 class GoodsReceiptViewSet(viewsets.ModelViewSet):

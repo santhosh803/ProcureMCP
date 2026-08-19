@@ -118,8 +118,13 @@ class PolicyDocumentTests(TestCase):
 
 class PurchaseOrderAPITests(TestCase):
     def setUp(self):
+        from django.contrib.auth import get_user_model
+
         self.client = APIClient()
         self.vendor = make_vendor()
+        self.approver = get_user_model().objects.create_superuser(
+            "approver", "approver@procuremcp.example", "pw"
+        )
 
     def test_list_purchase_orders(self):
         make_po(self.vendor)
@@ -128,11 +133,18 @@ class PurchaseOrderAPITests(TestCase):
         self.assertGreaterEqual(resp.data["count"], 1)
 
     def test_approve_action_requires_pending_state(self):
+        self.client.force_authenticate(self.approver)
         po = make_po(self.vendor, status=PurchaseOrder.Status.DRAFT)
         resp = self.client.post(f"/api/purchase-orders/{po.id}/approve/")
         self.assertEqual(resp.status_code, 409)
 
+    def test_approve_requires_permission(self):
+        po = make_po(self.vendor, status=PurchaseOrder.Status.PENDING_APPROVAL)
+        resp = self.client.post(f"/api/purchase-orders/{po.id}/approve/")
+        self.assertEqual(resp.status_code, 403)
+
     def test_approve_transitions_pending_to_approved(self):
+        self.client.force_authenticate(self.approver)
         po = make_po(self.vendor, status=PurchaseOrder.Status.PENDING_APPROVAL)
         resp = self.client.post(f"/api/purchase-orders/{po.id}/approve/")
         self.assertEqual(resp.status_code, 200)
@@ -179,3 +191,98 @@ class SchemaTests(TestCase):
     def test_openapi_schema_available(self):
         resp = self.client.get("/api/schema/")
         self.assertEqual(resp.status_code, 200)
+
+
+class ApprovalRoutingTests(TestCase):
+    def test_tier_thresholds(self):
+        from .approval_engine import tier_for_value
+
+        self.assertEqual(tier_for_value(Decimal("9999.99")), ApprovalRequest.ApproverTier.MANAGER)
+        # Exactly at the manager ceiling routes to finance.
+        self.assertEqual(tier_for_value(Decimal("10000")), ApprovalRequest.ApproverTier.FINANCE)
+        self.assertEqual(tier_for_value(Decimal("49999.99")), ApprovalRequest.ApproverTier.FINANCE)
+        # Exactly at the finance ceiling routes to CFO.
+        self.assertEqual(tier_for_value(Decimal("50000")), ApprovalRequest.ApproverTier.CFO)
+        self.assertEqual(tier_for_value(Decimal("75000")), ApprovalRequest.ApproverTier.CFO)
+
+    def test_route_approval_creates_cfo_request_for_high_value(self):
+        from .approval_engine import route_approval
+
+        vendor = make_vendor()
+        po = make_po(vendor, total_value=Decimal("75000"))
+        created = route_approval(po, po.total_value, po.is_sole_source)
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0].approver_tier, ApprovalRequest.ApproverTier.CFO)
+
+    def test_sole_source_creates_parallel_committee_request(self):
+        from .approval_engine import route_approval
+
+        vendor = make_vendor()
+        po = make_po(vendor, total_value=Decimal("12000"), is_sole_source=True)
+        created = route_approval(po, po.total_value, is_sole_source=True)
+        tiers = {a.approver_tier for a in created}
+        self.assertIn(ApprovalRequest.ApproverTier.FINANCE, tiers)
+        self.assertIn(ApprovalRequest.ApproverTier.SOLE_SOURCE_COMMITTEE, tiers)
+
+
+class StateMachineTests(TestCase):
+    def setUp(self):
+        self.vendor = make_vendor()
+
+    def test_submit_moves_to_pending_and_routes_cfo(self):
+        po = make_po(self.vendor, total_value=Decimal("60000"))
+        po.submit_for_approval()
+        po.save()
+        self.assertEqual(po.status, PurchaseOrder.Status.PENDING_APPROVAL)
+        approval = ApprovalRequest.objects.get(
+            entity_type="purchase_order", entity_id=po.po_number
+        )
+        self.assertEqual(approval.approver_tier, ApprovalRequest.ApproverTier.CFO)
+
+    def test_invalid_transition_raises(self):
+        from django_fsm import TransitionNotAllowed
+
+        po = make_po(self.vendor, status=PurchaseOrder.Status.DRAFT)
+        with self.assertRaises(TransitionNotAllowed):
+            po.approve()  # cannot approve directly from draft
+
+    def test_full_lifecycle(self):
+        po = make_po(self.vendor, total_value=Decimal("5000"))
+        po.submit_for_approval(); po.save()
+        po.approve(); po.save()
+        self.assertIsNotNone(po.approved_at)
+        po.send_to_vendor(); po.save()
+        self.assertIsNotNone(po.sent_at)
+
+        material = make_material()
+        POLineItem.objects.create(
+            po=po, material=material,
+            quantity_ordered=Decimal("10"), quantity_received=Decimal("10"),
+            unit_price=Decimal("2.50"), delivery_date=date.today(),
+        )
+        po.record_receipt(); po.save()
+        self.assertEqual(po.status, PurchaseOrder.Status.FULLY_RECEIVED)
+        po.mark_invoiced(); po.save()
+        po.close(); po.save()
+        self.assertEqual(po.status, PurchaseOrder.Status.CLOSED)
+
+    def test_partial_then_full_receipt(self):
+        po = make_po(self.vendor, status=PurchaseOrder.Status.SENT_TO_VENDOR)
+        material = make_material()
+        line = POLineItem.objects.create(
+            po=po, material=material,
+            quantity_ordered=Decimal("10"), quantity_received=Decimal("4"),
+            unit_price=Decimal("2.50"), delivery_date=date.today(),
+        )
+        po.record_receipt(); po.save()
+        self.assertEqual(po.status, PurchaseOrder.Status.PARTIALLY_RECEIVED)
+        line.quantity_received = Decimal("10")
+        line.save()
+        po.record_receipt(); po.save()
+        self.assertEqual(po.status, PurchaseOrder.Status.FULLY_RECEIVED)
+
+    def test_reject_transition(self):
+        po = make_po(self.vendor, total_value=Decimal("5000"))
+        po.submit_for_approval(); po.save()
+        po.reject(); po.save()
+        self.assertEqual(po.status, PurchaseOrder.Status.REJECTED)

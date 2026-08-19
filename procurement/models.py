@@ -9,7 +9,11 @@ an immutable audit ledger.
 import uuid
 
 from django.db import models
+from django.utils import timezone
+from django_fsm import RETURN_VALUE, FSMField, transition
 from pgvector.django import HnswIndex, VectorField
+
+from .state_machines import resolve_receipt_state
 
 
 def _uuid_str() -> str:
@@ -113,6 +117,7 @@ class PurchaseOrder(models.Model):
         DRAFT = "draft"
         PENDING_APPROVAL = "pending_approval"
         APPROVED = "approved"
+        REJECTED = "rejected"
         SENT_TO_VENDOR = "sent_to_vendor"
         PARTIALLY_RECEIVED = "partially_received"
         FULLY_RECEIVED = "fully_received"
@@ -133,8 +138,11 @@ class PurchaseOrder(models.Model):
     )
     total_value = models.DecimalField(max_digits=12, decimal_places=2)
     currency = models.CharField(max_length=10, default="USD")
-    status = models.CharField(
-        max_length=30, choices=Status.choices, default=Status.DRAFT
+    # FSMField governs the lifecycle; transitions are the methods below. It is
+    # left unprotected so master-data tooling (seeding, imports) can set states
+    # directly, while application flows go through the guarded transitions.
+    status = FSMField(
+        max_length=30, choices=Status.choices, default=Status.DRAFT, protected=False
     )
     is_sole_source = models.BooleanField(default=False)
     sole_source_justification = models.TextField(blank=True)
@@ -150,6 +158,62 @@ class PurchaseOrder(models.Model):
 
     def __str__(self):
         return f"PO {self.po_number} ({self.get_status_display()})"
+
+    # -- Lifecycle transitions (django-fsm) ---------------------------------
+
+    @transition(field=status, source=Status.DRAFT, target=Status.PENDING_APPROVAL)
+    def submit_for_approval(self):
+        """Submit a draft PO and open the required approval request(s)."""
+        from .approval_engine import route_approval
+
+        return route_approval(self, self.total_value, self.is_sole_source)
+
+    @transition(
+        field=status,
+        source=Status.PENDING_APPROVAL,
+        target=Status.APPROVED,
+        permission="procurement.change_purchaseorder",
+    )
+    def approve(self):
+        self.approved_at = timezone.now()
+
+    @transition(field=status, source=Status.PENDING_APPROVAL, target=Status.REJECTED)
+    def reject(self):
+        pass
+
+    @transition(field=status, source=Status.APPROVED, target=Status.SENT_TO_VENDOR)
+    def send_to_vendor(self):
+        self.sent_at = timezone.now()
+
+    @transition(
+        field=status,
+        source=[Status.SENT_TO_VENDOR, Status.PARTIALLY_RECEIVED],
+        target=RETURN_VALUE(Status.PARTIALLY_RECEIVED, Status.FULLY_RECEIVED),
+    )
+    def record_receipt(self):
+        """Advance to partially/fully received based on line-item quantities."""
+        return resolve_receipt_state(self)
+
+    @transition(field=status, source=Status.FULLY_RECEIVED, target=Status.INVOICED)
+    def mark_invoiced(self):
+        pass
+
+    @transition(field=status, source=Status.INVOICED, target=Status.CLOSED)
+    def close(self):
+        pass
+
+    @transition(
+        field=status,
+        source=[
+            Status.DRAFT,
+            Status.PENDING_APPROVAL,
+            Status.APPROVED,
+            Status.SENT_TO_VENDOR,
+        ],
+        target=Status.CANCELLED,
+    )
+    def cancel(self):
+        pass
 
 
 class POLineItem(models.Model):

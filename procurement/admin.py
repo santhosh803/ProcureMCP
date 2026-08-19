@@ -10,9 +10,9 @@ import json
 from decimal import Decimal
 
 from django.contrib import admin, messages
-from django.db.models import Count, Q
 from django.utils import timezone
 from django.utils.html import format_html
+from django_fsm import TransitionNotAllowed
 
 from .models import (
     ApprovalRequest,
@@ -55,6 +55,7 @@ PO_STATUS_COLORS = {
     "draft": "#6b7280",
     "pending_approval": "#d97706",
     "approved": "#2563eb",
+    "rejected": "#dc2626",
     "sent_to_vendor": "#7c3aed",
     "partially_received": "#0891b2",
     "fully_received": "#0d9488",
@@ -377,14 +378,16 @@ class PurchaseOrderAdmin(admin.ModelAdmin):
                 request, "You do not have permission to approve purchase orders.", messages.ERROR
             )
             return
-        eligible = queryset.filter(status="pending_approval")
         count = 0
-        for po in eligible:
-            po.status = PurchaseOrder.Status.APPROVED
-            po.approved_at = timezone.now()
-            po.save(update_fields=["status", "approved_at"])
+        skipped = 0
+        for po in queryset:
+            try:
+                po.approve()
+            except TransitionNotAllowed:
+                skipped += 1
+                continue
+            po.save()
             count += 1
-        skipped = queryset.count() - count
         msg = f"Approved {count} purchase order(s)."
         if skipped:
             msg += f" Skipped {skipped} not in 'pending_approval' state."
@@ -502,13 +505,48 @@ class ApprovalRequestAdmin(admin.ModelAdmin):
         return (text[:70] + "…") if len(text) > 70 else text
 
     def _decide(self, request, queryset, decision):
-        updated = queryset.filter(decision="pending")
-        count = updated.update(
-            decision=decision,
-            decided_at=timezone.now(),
-            decision_reason=f"Bulk {decision} by {request.user.get_username()}",
-        )
-        self.message_user(request, f"{decision.title()} {count} request(s).", messages.SUCCESS)
+        pending = list(queryset.filter(decision="pending"))
+        affected_pos = set()
+        for req in pending:
+            req.decision = decision
+            req.decided_at = timezone.now()
+            req.decision_reason = f"Bulk {decision} by {request.user.get_username()}"
+            req.save(update_fields=["decision", "decided_at", "decision_reason"])
+            if req.entity_type == "purchase_order":
+                affected_pos.add(req.entity_id)
+
+        transitioned = self._cascade_to_purchase_orders(affected_pos, decision)
+        msg = f"{decision.title()} {len(pending)} request(s)."
+        if transitioned:
+            msg += f" Transitioned {transitioned} purchase order(s)."
+        self.message_user(request, msg, messages.SUCCESS)
+
+    def _cascade_to_purchase_orders(self, po_numbers, decision):
+        """Reflect approval decisions onto the underlying purchase orders.
+
+        A PO is approved once no approval requests for it remain pending; a
+        single rejection rejects the PO.
+        """
+        transitioned = 0
+        for po_number in po_numbers:
+            po = PurchaseOrder.objects.filter(po_number=po_number).first()
+            if po is None or po.status != PurchaseOrder.Status.PENDING_APPROVAL:
+                continue
+            reqs = ApprovalRequest.objects.filter(
+                entity_type="purchase_order", entity_id=po_number
+            )
+            try:
+                if reqs.filter(decision="rejected").exists():
+                    po.reject()
+                elif not reqs.filter(decision="pending").exists():
+                    po.approve()
+                else:
+                    continue
+            except TransitionNotAllowed:
+                continue
+            po.save()
+            transitioned += 1
+        return transitioned
 
     @admin.action(description="Approve selected requests")
     def approve_requests(self, request, queryset):

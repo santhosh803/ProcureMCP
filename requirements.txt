@@ -30,6 +30,8 @@ django-cors-headers==4.9.0
     # via procuremcp
 django-filter==26.1
     # via procuremcp
+django-fsm==3.0.1
+    # via procuremcp
 djangorestframework==3.18.0
     # via
     #   drf-spectacular
