@@ -7,12 +7,17 @@ production. Nothing sensitive is hardcoded here.
 """
 
 import os
+import sys
 from pathlib import Path
 
 import dj_database_url
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# True while running the test suite; used to disable external side effects
+# (embedding enqueue, notifications) that should not fire during tests.
+TESTING = "test" in sys.argv
 
 # Load environment variables from a local .env file when present.
 load_dotenv(BASE_DIR / ".env")
@@ -197,9 +202,25 @@ CORS_ALLOWED_ORIGINS = [
 ]
 
 
-# --- Async / broker (used from Phase 4 onward) -------------------------------
+# --- Async / broker (Celery on shared Upstash Redis) -------------------------
 
 REDIS_URL = os.environ.get("REDIS_URL")
+
+# CELERY_* settings are read by the Celery app via the "CELERY" namespace.
+# The mandatory global_keyprefix that isolates this project on the shared Redis
+# instance is set directly in procuremcp/celery.py.
+CELERY_BROKER_URL = REDIS_URL
+CELERY_RESULT_BACKEND = REDIS_URL
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TIMEZONE = "UTC"
+CELERY_TASK_ALWAYS_EAGER = env_bool("CELERY_TASK_ALWAYS_EAGER", False)
+CELERY_TASK_EAGER_PROPAGATES = True
+# Upstash rediss:// endpoints negotiate TLS; relax cert verification to match
+# the connection string's ssl_cert_reqs=CERT_NONE.
+CELERY_BROKER_USE_SSL = {"ssl_cert_reqs": "CERT_NONE"} if (REDIS_URL or "").startswith("rediss://") else None
+CELERY_REDIS_BACKEND_USE_SSL = CELERY_BROKER_USE_SSL
 
 
 # --- Google Vertex AI (used from Phase 4 onward) -----------------------------

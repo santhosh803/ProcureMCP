@@ -149,6 +149,35 @@ class PolicyDocumentViewSet(viewsets.ModelViewSet):
     search_fields = ["title", "content"]
     ordering_fields = ["effective_date", "title"]
 
+    @action(detail=False, methods=["post"])
+    def search(self, request):
+        """Semantic policy search via pgvector RAG retrieval.
+
+        Body: ``{"query": str, "k": int = 5, "policy_types": [str] | null}``.
+        """
+        query = (request.data or {}).get("query", "").strip()
+        if not query:
+            return Response(
+                {"detail": "A non-empty 'query' is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            k = int(request.data.get("k", 5))
+        except (TypeError, ValueError):
+            k = 5
+        policy_types = request.data.get("policy_types") or None
+
+        from agent.retriever import retrieve_policy_context
+
+        try:
+            results = retrieve_policy_context(query, k=k, policy_types=policy_types)
+        except Exception as exc:  # noqa: BLE001 - surface embedding/DB errors to the caller
+            return Response(
+                {"detail": f"Retrieval failed: {exc}"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        return Response({"query": query, "count": len(results), "results": results})
+
 
 class AuditLedgerViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = AuditLedger.objects.all()

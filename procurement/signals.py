@@ -110,9 +110,13 @@ def embed_policy_on_create(sender, instance, created, **kwargs):
     """
     if not created:
         return
+    from django.conf import settings
+
+    if getattr(settings, "TESTING", False):
+        return
     try:
         from .tasks import embed_policy_document_task
 
         embed_policy_document_task.delay(instance.id)
-    except Exception:  # noqa: BLE001 - embedding pipeline not yet available
-        logger.debug("Embedding pipeline unavailable; policy %s not queued.", instance.id)
+    except Exception:  # noqa: BLE001 - broker unavailable; backfill command can recover
+        logger.warning("Could not enqueue embedding for policy %s.", instance.id)

@@ -193,6 +193,63 @@ class SchemaTests(TestCase):
         self.assertEqual(resp.status_code, 200)
 
 
+class PolicyRetrieverTests(TestCase):
+    """Exercise the pgvector cosine-similarity ordering without hitting Vertex."""
+
+    def _vec(self, *leading):
+        v = list(leading)
+        return v + [0.0] * (768 - len(v))
+
+    def test_cosine_ranking_orders_by_similarity(self):
+        from unittest.mock import patch
+
+        near = PolicyDocument.objects.create(
+            title="Sole-Source Justification",
+            policy_type=PolicyDocument.PolicyType.SOLE_SOURCE,
+            content="Single-source purchases require written justification.",
+            effective_date=date.today(),
+        )
+        near.embedding = self._vec(1.0, 0.0, 0.0)
+        near.save(update_fields=["embedding"])
+
+        far = PolicyDocument.objects.create(
+            title="Payment Terms Standard",
+            policy_type=PolicyDocument.PolicyType.CATEGORY_RULE,
+            content="Default payment term is NET30.",
+            effective_date=date.today(),
+        )
+        far.embedding = self._vec(0.0, 1.0, 0.0)
+        far.save(update_fields=["embedding"])
+
+        from agent import retriever
+
+        with patch.object(retriever, "embed_text", return_value=self._vec(1.0, 0.0, 0.0)):
+            results = retriever.retrieve_policy_context("sole source rules", k=2)
+
+        self.assertEqual(results[0]["title"], "Sole-Source Justification")
+        self.assertGreater(results[0]["similarity_score"], results[1]["similarity_score"])
+
+    def test_policy_type_filter(self):
+        from unittest.mock import patch
+
+        p = PolicyDocument.objects.create(
+            title="CFO Approval Threshold",
+            policy_type=PolicyDocument.PolicyType.SPENDING_LIMIT,
+            content="POs of USD 50,000+ require CFO approval.",
+            effective_date=date.today(),
+        )
+        p.embedding = self._vec(1.0)
+        p.save(update_fields=["embedding"])
+
+        from agent import retriever
+
+        with patch.object(retriever, "embed_text", return_value=self._vec(1.0)):
+            results = retriever.retrieve_policy_context(
+                "approval", k=5, policy_types=["sole_source"]
+            )
+        self.assertEqual(results, [])
+
+
 class ApprovalRoutingTests(TestCase):
     def test_tier_thresholds(self):
         from .approval_engine import tier_for_value
