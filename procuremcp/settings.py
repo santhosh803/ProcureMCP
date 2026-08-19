@@ -63,6 +63,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "corsheaders",
     "django_filters",
+    "drf_spectacular",
     "pgvector.django",
     # Local
     "procurement",
@@ -165,6 +166,24 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 25,
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "ProcureMCP API",
+    "DESCRIPTION": "Enterprise procurement platform — Procure-to-Pay REST API.",
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
+    "ENUM_NAME_OVERRIDES": {
+        "VendorStatusEnum": "procurement.models.VendorMaster.Status",
+        "PurchaseOrderStatusEnum": "procurement.models.PurchaseOrder.Status",
+        "PurchaseRequisitionStatusEnum": "procurement.models.PurchaseRequisition.Status",
+        "InvoiceMatchStatusEnum": "procurement.models.Invoice.MatchStatus",
+        "GoodsReceiptQualityStatusEnum": "procurement.models.GoodsReceipt.QualityStatus",
+        "ApprovalDecisionEnum": "procurement.models.ApprovalRequest.Decision",
+        "ApproverTierEnum": "procurement.models.ApprovalRequest.ApproverTier",
+        "PolicyTypeEnum": "procurement.models.PolicyDocument.PolicyType",
+    },
 }
 
 
