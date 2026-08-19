@@ -23,6 +23,27 @@ TESTING = "test" in sys.argv
 load_dotenv(BASE_DIR / ".env")
 
 
+def _materialize_gcp_credentials():
+    """On platforms without a mounted key file, write GCP_CREDENTIALS_JSON to disk.
+
+    Railway (and similar) provide the service-account JSON as an env var rather
+    than a file. If present, write it to a temp file and point
+    GOOGLE_APPLICATION_CREDENTIALS at it so the Google client can authenticate.
+    """
+    raw = os.environ.get("GCP_CREDENTIALS_JSON")
+    if not raw:
+        return
+    import tempfile
+
+    fd, path = tempfile.mkstemp(prefix="gcp-", suffix=".json")
+    with os.fdopen(fd, "w") as fh:
+        fh.write(raw)
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = path
+
+
+_materialize_gcp_credentials()
+
+
 def env_bool(name: str, default: bool = False) -> bool:
     value = os.environ.get(name)
     if value is None:
@@ -238,3 +259,7 @@ if IS_PRODUCTION:
     SECURE_SSL_REDIRECT = True
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True

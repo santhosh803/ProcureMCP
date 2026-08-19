@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}ProcureMCP — Operations{% endblock %}
+
+{% block content %}
+<section class="max-w-6xl mx-auto px-6 py-10">
+  <div class="mb-8">
+    <h1 class="text-2xl font-bold tracking-tight text-slate-900">Procurement Operations</h1>
+    <p class="text-slate-500 mt-1">Policy-aware agent orchestration across the full Procure-to-Pay lifecycle.</p>
+  </div>
+
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-10">
+    <div class="rounded-xl bg-white border border-slate-200 p-5">
+      <div class="text-3xl font-bold text-slate-900">{{ po_open_count }}</div>
+      <div class="text-sm text-slate-500 mt-1">Open purchase orders</div>
+    </div>
+    <div class="rounded-xl bg-white border border-slate-200 p-5">
+      <div class="text-3xl font-bold text-amber-600">{{ pending_approvals }}</div>
+      <div class="text-sm text-slate-500 mt-1">Pending approvals</div>
+    </div>
+    <div class="rounded-xl bg-white border border-slate-200 p-5">
+      <div class="text-3xl font-bold text-slate-900">{{ vendor_count }}</div>
+      <div class="text-sm text-slate-500 mt-1">Approved vendors</div>
+    </div>
+    <div class="rounded-xl bg-white border border-slate-200 p-5">
+      <div class="text-3xl font-bold text-slate-900">{{ policy_count }}</div>
+      <div class="text-sm text-slate-500 mt-1">Policy documents</div>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+    {% include "tile.html" with href="/admin/procurement/purchaseorder/" title="PO Queue" desc="Track purchase orders through every lifecycle state." %}
+    {% include "tile.html" with href="/admin/procurement/approvalrequest/" title="Pending Approvals" desc="Multi-tier approval dashboard with AI risk summaries." %}
+    {% include "tile.html" with href="/admin/procurement/vendormaster/" title="Vendor Scorecards" desc="Colour-coded delivery, quality, and pricing ratings." %}
+    {% include "tile.html" with href="/admin/procurement/policydocument/" title="Policy Library" desc="Embedded policy corpus for semantic RAG retrieval." %}
+    {% include "tile.html" with href="/chat/" title="Agent Chat" desc="Converse with the RAG-in-the-loop procurement agent." %}
+    {% include "tile.html" with href="/api/docs/" title="API Reference" desc="OpenAPI schema and interactive Swagger UI." %}
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}ProcureMCP — Agent Chat{% endblock %}
+
+{% block content %}
+<section class="max-w-4xl mx-auto px-6 py-8">
+  <div class="mb-4">
+    <h1 class="text-xl font-bold tracking-tight text-slate-900">Procurement Agent</h1>
+    <p class="text-slate-500 text-sm mt-1">
+      RAG-in-the-loop orchestration. The agent retrieves policy context, chains MCP tools, and pauses for human approval on gated actions.
+    </p>
+  </div>
+
+  <div id="messages" class="space-y-4 mb-4 min-h-[320px]"></div>
+
+  <form id="chat-form" class="flex gap-2 sticky bottom-4">
+    <input id="chat-input" type="text" autocomplete="off"
+      placeholder="e.g. Create a PO for 500 units of MAT-STL-BLT-001 from our cheapest approved vendor"
+      class="flex-1 rounded-lg border border-slate-300 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+    <button id="chat-send" type="submit"
+      class="rounded-lg bg-indigo-600 text-white px-5 py-3 text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
+      Send
+    </button>
+  </form>
+
+  <div class="mt-3 text-xs text-slate-400">
+    Example prompts:
+    <button class="prompt-chip underline hover:text-indigo-600" type="button">What is the approval limit for a $12,000 indirect purchase?</button>
+    &middot;
+    <button class="prompt-chip underline hover:text-indigo-600" type="button">Evaluate vendor VEN-00001</button>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'chat.js' %}"></script>
+{% endblock %}

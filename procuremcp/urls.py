@@ -7,7 +7,11 @@ from drf_spectacular.views import (
     SpectacularSwaggerView,
 )
 
+from procurement import pages
+
 urlpatterns = [
+    path("", pages.admin_home, name="home"),
+    path("chat/", pages.chat_page, name="chat"),
     path("admin/", admin.site.urls),
     path("api/", include("procurement.urls")),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
