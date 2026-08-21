@@ -7,7 +7,22 @@
   const form = document.getElementById("chat-form");
   const input = document.getElementById("chat-input");
   const sendBtn = document.getElementById("chat-send");
+  const promptChips = document.getElementById("prompt-chips");
   let sessionId = null;
+
+  function csrfToken() {
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    if (meta && meta.content) return meta.content;
+    const match = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+    return match ? decodeURIComponent(match[1]) : "";
+  }
+
+  function jsonHeaders() {
+    return {
+      "Content-Type": "application/json",
+      "X-CSRFToken": csrfToken(),
+    };
+  }
 
   function el(tag, cls, html) {
     const e = document.createElement(tag);
@@ -28,7 +43,7 @@
     else card.appendChild(node);
     wrap.appendChild(card);
     messages.appendChild(wrap);
-    window.scrollTo(0, document.body.scrollHeight);
+    messages.scrollTop = messages.scrollHeight;
     return card;
   }
 
@@ -75,14 +90,15 @@
   }
 
   function hitlCard(payload) {
-    const card = el("div", "rounded-lg bg-amber-50 border border-amber-300 p-3");
-    card.appendChild(el("div", "text-xs font-semibold text-amber-800 mb-1", "&#9888; Human approval required"));
+    const card = el("div", "rounded-lg bg-amber-50 border border-amber-300 p-3 transition-colors");
+    card.dataset.state = "pending";
+    card.appendChild(el("div", "text-xs font-semibold text-amber-800 mb-1 hitl-heading", "&#9888; Human approval required"));
     if (payload && payload.summary) {
       card.appendChild(el("div", "text-xs text-amber-900 mb-2", payload.summary));
     }
-    const btns = el("div", "flex gap-2 mt-1");
-    const approve = el("button", "rounded-md bg-emerald-600 text-white text-xs px-3 py-1.5 hover:bg-emerald-700", "Approve");
-    const reject = el("button", "rounded-md bg-red-600 text-white text-xs px-3 py-1.5 hover:bg-red-700", "Reject");
+    const btns = el("div", "flex gap-2 mt-1 hitl-actions");
+    const approve = el("button", "rounded-md bg-emerald-600 text-white text-xs px-3 py-1.5 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed", "Approve");
+    const reject = el("button", "rounded-md bg-red-600 text-white text-xs px-3 py-1.5 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed", "Reject");
     approve.onclick = () => decide("approved", card);
     reject.onclick = () => decide("rejected", card);
     btns.appendChild(approve);
@@ -91,18 +107,74 @@
     return card;
   }
 
+  function applyDecidedStyle(card, decision) {
+    // Swap the amber "pending" palette for a decision-coloured one so the card
+    // itself shows what was chosen — no ambiguity from a nearby button state.
+    const isApproved = decision === "approved";
+    card.classList.remove("bg-amber-50", "border-amber-300");
+    card.classList.add(
+      isApproved ? "bg-emerald-50" : "bg-red-50",
+      isApproved ? "border-emerald-300" : "border-red-300"
+    );
+    card.dataset.state = decision;
+
+    const heading = card.querySelector(".hitl-heading");
+    if (heading) {
+      heading.classList.remove("text-amber-800");
+      heading.classList.add(isApproved ? "text-emerald-800" : "text-red-800");
+      heading.innerHTML = isApproved
+        ? "&#10003; Approved by you"
+        : "&#10007; Rejected by you";
+    }
+  }
+
   async function decide(decision, card) {
     card.querySelectorAll("button").forEach((b) => (b.disabled = true));
-    const resp = await fetch("/api/agent/approve/", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId, decision: decision }),
-    });
-    const data = await resp.json();
-    const box = agentContainer();
-    box.appendChild(
-      el("div", "text-xs text-slate-600", "Decision recorded: <b>" + decision + "</b>. " + (data.final_message || ""))
+    let data = {};
+    try {
+      const resp = await fetch("/api/agent/approve/", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: jsonHeaders(),
+        body: JSON.stringify({ session_id: sessionId, decision: decision }),
+      });
+      data = await resp.json();
+    } catch (e) {
+      data = { detail: String(e) };
+    }
+
+    // Rewrite the HITL card in place to reflect the decision.
+    applyDecidedStyle(card, decision);
+    const actions = card.querySelector(".hitl-actions");
+    if (actions) actions.remove();
+    const outcome = data.outcome || {};
+    const parts = [];
+    if (outcome.entity_id) {
+      const label = (outcome.entity_type || "entity").replace(/_/g, " ");
+      parts.push(
+        "<b>" + label + " " + outcome.entity_id + "</b>" +
+          (outcome.entity_status ? " &rarr; <b>" + outcome.entity_status + "</b>" : "")
+      );
+      if (typeof outcome.approvals_updated === "number") {
+        parts.push(outcome.approvals_updated + " approval request(s) resolved");
+      }
+    }
+    if (data.detail) parts.push("<span class='text-red-700'>" + data.detail + "</span>");
+    const summaryText = parts.length ? parts.join(" &middot; ") : "Decision recorded.";
+    const isApproved = decision === "approved";
+    card.appendChild(
+      el(
+        "div",
+        "text-xs mt-2 " + (isApproved ? "text-emerald-900" : "text-red-900"),
+        summaryText
+      )
     );
+
+    // Agent's closing message goes in its own bubble below, as before.
+    if (data.final_message) {
+      const box = agentContainer();
+      box.appendChild(el("div", "text-xs text-slate-600", data.final_message));
+    }
   }
 
   function handleEvent(box, event, data) {
@@ -124,6 +196,9 @@
   }
 
   async function send(message) {
+    // Hide the quick-prompt chips once the conversation begins.
+    // Inline style beats Tailwind's `.flex` (which would otherwise re-show it).
+    if (promptChips) promptChips.style.display = "none";
     bubble("user", message);
     const box = agentContainer();
     box.appendChild(el("div", "text-xs text-slate-400", "Thinking&hellip;"));
@@ -131,7 +206,8 @@
 
     const resp = await fetch("/api/agent/chat/", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      headers: jsonHeaders(),
       body: JSON.stringify({ message: message, session_id: sessionId }),
     });
     box.firstChild.remove(); // drop the "Thinking..." placeholder
@@ -173,7 +249,7 @@
 
   document.querySelectorAll(".prompt-chip").forEach((chip) => {
     chip.addEventListener("click", () => {
-      input.value = chip.textContent;
+      input.value = chip.textContent.trim();
       input.focus();
     });
   });

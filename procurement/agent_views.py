@@ -3,19 +3,21 @@
 * ``POST /api/agent/chat/``     — Server-Sent Events stream of the agent's
   reasoning steps, policy citations, tool calls, and any HITL pause.
 * ``POST /api/agent/approve/``  — resume a paused run with an approval decision.
-* ``GET  /api/agent/sessions/`` — list known agent sessions.
+* ``GET  /api/agent/sessions/`` — list known agent sessions for the caller.
+
+Endpoints require an authenticated Django session and standard CSRF protection.
+Session status is persisted in the ``AgentSession`` table so multiple web
+workers (and the operator via Django Admin) see a consistent view.
 """
 
 import json
 import uuid
 
+from django.db import transaction
 from django.http import JsonResponse, StreamingHttpResponse
-from django.utils import timezone
-from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
-# Simple in-process session registry (single-worker dev/demo).
-_SESSIONS = {}
+from .models import AgentSession
 
 
 def _sse(event, data):
@@ -24,6 +26,32 @@ def _sse(event, data):
 
 def _config(thread_id):
     return {"configurable": {"thread_id": thread_id}}
+
+
+def _require_auth(request):
+    if not request.user.is_authenticated:
+        return JsonResponse(
+            {"detail": "Authentication required."}, status=401
+        )
+    return None
+
+
+def _touch_session(thread_id, user, *, status, message=None):
+    defaults = {"user": user if user and user.is_authenticated else None, "status": status}
+    if message is not None:
+        defaults["last_message"] = message[:2000]
+    with transaction.atomic():
+        session, created = AgentSession.objects.get_or_create(
+            session_id=thread_id, defaults=defaults
+        )
+        if not created:
+            session.status = status
+            if message is not None:
+                session.last_message = message[:2000]
+            if user and user.is_authenticated and session.user_id is None:
+                session.user = user
+            session.save(update_fields=["status", "last_message", "user", "last_activity"])
+        return session
 
 
 def _summarize_message(node, update):
@@ -53,9 +81,12 @@ def _summarize_message(node, update):
     return events
 
 
-@csrf_exempt
 @require_http_methods(["POST"])
 def agent_chat(request):
+    auth_response = _require_auth(request)
+    if auth_response is not None:
+        return auth_response
+
     try:
         body = json.loads(request.body or "{}")
     except json.JSONDecodeError:
@@ -72,10 +103,13 @@ def agent_chat(request):
 
     graph = get_graph()
     config = _config(thread_id)
-    _SESSIONS[thread_id] = {"last_activity": timezone.now().isoformat(), "status": "running"}
+    user = request.user
+    _touch_session(thread_id, user, status=AgentSession.Status.RUNNING, message=message)
 
     def stream():
         yield _sse("session", {"session_id": thread_id})
+        final_status = AgentSession.Status.IDLE
+        emitted_hitl = False
         try:
             for chunk in graph.stream(
                 {"messages": [HumanMessage(content=message)]},
@@ -86,25 +120,34 @@ def agent_chat(request):
                     if node == "__interrupt__":
                         interrupts = update if isinstance(update, (list, tuple)) else [update]
                         payload = getattr(interrupts[0], "value", interrupts[0])
-                        _SESSIONS[thread_id]["status"] = "awaiting_approval"
+                        final_status = AgentSession.Status.AWAITING_APPROVAL
+                        _touch_session(thread_id, user, status=final_status)
                         yield _sse("hitl_pending", {"session_id": thread_id, "payload": payload})
+                        emitted_hitl = True
                         continue
                     for event, data in _summarize_message(node, update):
                         yield _sse(event, data)
-            # Detect a pause captured outside the update stream.
+            # Fallback: some LangGraph paths surface the interrupt only via
+            # get_state() rather than as a mid-stream __interrupt__ chunk.
+            # Only fire when we did not already emit above, so the UI does not
+            # render the same HITL card twice.
             state = graph.get_state(config)
             if state.next:
-                _SESSIONS[thread_id]["status"] = "awaiting_approval"
-                pending = []
-                for task in state.tasks:
-                    for itr in getattr(task, "interrupts", []) or []:
-                        pending.append(getattr(itr, "value", None))
-                if pending:
-                    yield _sse("hitl_pending", {"session_id": thread_id, "payload": pending[0]})
+                final_status = AgentSession.Status.AWAITING_APPROVAL
+                _touch_session(thread_id, user, status=final_status)
+                if not emitted_hitl:
+                    pending = []
+                    for task in state.tasks:
+                        for itr in getattr(task, "interrupts", []) or []:
+                            pending.append(getattr(itr, "value", None))
+                    if pending:
+                        yield _sse("hitl_pending", {"session_id": thread_id, "payload": pending[0]})
             else:
-                _SESSIONS[thread_id]["status"] = "idle"
-            yield _sse("done", {"session_id": thread_id, "status": _SESSIONS[thread_id]["status"]})
+                final_status = AgentSession.Status.IDLE
+                _touch_session(thread_id, user, status=final_status)
+            yield _sse("done", {"session_id": thread_id, "status": final_status})
         except Exception as exc:  # noqa: BLE001 - report streaming failures to the client
+            _touch_session(thread_id, user, status=AgentSession.Status.FAILED)
             yield _sse("error", {"detail": f"{type(exc).__name__}: {exc}"})
 
     response = StreamingHttpResponse(stream(), content_type="text/event-stream")
@@ -113,9 +156,12 @@ def agent_chat(request):
     return response
 
 
-@csrf_exempt
 @require_http_methods(["POST"])
 def agent_approve(request):
+    auth_response = _require_auth(request)
+    if auth_response is not None:
+        return auth_response
+
     try:
         body = json.loads(request.body or "{}")
     except json.JSONDecodeError:
@@ -139,30 +185,66 @@ def agent_approve(request):
     try:
         result = graph.invoke(Command(resume=resume_value), config)
     except Exception as exc:  # noqa: BLE001
+        _touch_session(thread_id, request.user, status=AgentSession.Status.FAILED)
         return JsonResponse({"detail": f"{type(exc).__name__}: {exc}"}, status=500)
 
     state = graph.get_state(config)
-    status = "awaiting_approval" if state.next else "idle"
-    _SESSIONS.setdefault(thread_id, {})
-    _SESSIONS[thread_id].update({"last_activity": timezone.now().isoformat(), "status": status})
+    status = (
+        AgentSession.Status.AWAITING_APPROVAL if state.next else AgentSession.Status.IDLE
+    )
+    _touch_session(thread_id, request.user, status=status)
 
     final_text = ""
     for msg in reversed(result.get("messages", [])):
         if getattr(msg, "type", "") == "ai" and isinstance(msg.content, str) and msg.content.strip():
             final_text = msg.content
             break
+
+    # The model occasionally returns an empty closing message; synthesize a
+    # confirmation from the persisted decision outcome so the user always sees
+    # what happened.
+    outcome = result.get("hitl_outcome") or {}
+    if not final_text:
+        if outcome and outcome.get("entity_id"):
+            entity_label = (outcome.get("entity_type") or "entity").replace("_", " ").title()
+            status_label = outcome.get("entity_status") or "updated"
+            final_text = (
+                f"Decision '{outcome.get('decision', decision)}' recorded. "
+                f"{entity_label} {outcome['entity_id']} is now '{status_label}' "
+                f"({outcome.get('approvals_updated', 0)} approval request(s) resolved)."
+            )
+        else:
+            final_text = f"Decision '{decision}' recorded."
+
     return JsonResponse(
-        {"session_id": thread_id, "status": status, "decision": decision, "final_message": final_text}
+        {
+            "session_id": thread_id,
+            "status": status,
+            "decision": decision,
+            "final_message": final_text,
+            "outcome": outcome,
+        }
     )
 
 
 @require_http_methods(["GET"])
 def agent_sessions(request):
+    auth_response = _require_auth(request)
+    if auth_response is not None:
+        return auth_response
+
+    qs = AgentSession.objects.filter(user=request.user)
     return JsonResponse(
         {
-            "count": len(_SESSIONS),
+            "count": qs.count(),
             "sessions": [
-                {"session_id": sid, **info} for sid, info in _SESSIONS.items()
+                {
+                    "session_id": s.session_id,
+                    "status": s.status,
+                    "last_activity": s.last_activity.isoformat(),
+                    "last_message": s.last_message,
+                }
+                for s in qs[:100]
             ],
         }
     )

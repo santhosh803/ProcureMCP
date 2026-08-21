@@ -252,6 +252,23 @@ EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "text-embedding-004")
 EMBEDDING_DIMENSIONS = 768
 
 
+# --- Authentication ----------------------------------------------------------
+
+# Agent chat and API endpoints require an authenticated Django session.
+# Unauthenticated requests to protected pages are redirected here.
+LOGIN_URL = "/admin/login/"
+LOGIN_REDIRECT_URL = "/chat/"
+
+
+# --- Notification integration ------------------------------------------------
+
+# Generic incoming-webhook URL for approval notifications. When set, the
+# ``send_approval_notification_task`` Celery task POSTs a JSON payload here
+# (compatible with Slack incoming webhooks, Teams, Zapier, custom endpoints).
+# Leave empty to keep notifications log-only (default for local dev).
+NOTIFICATION_WEBHOOK_URL = os.environ.get("NOTIFICATION_WEBHOOK_URL", "")
+
+
 # --- Production hardening -----------------------------------------------------
 
 if IS_PRODUCTION:

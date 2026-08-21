@@ -103,12 +103,16 @@ def act_node(state):
                 result = {"error": f"{type(exc).__name__}: {exc}"}
         if isinstance(result, dict) and result.get("hitl_pending"):
             hitl_pending = True
+            entity_type = result.get("entity_type") or (
+                "purchase_order" if result.get("po_number") else None
+            )
             hitl_payload = {
                 "tool": name,
                 "summary": result.get("ai_risk_summary", ""),
                 "approval_routing": result.get("approval_routing")
                 or result.get("approval_requests", []),
                 "entity": result.get("po_number") or result.get("entity_id"),
+                "entity_type": entity_type,
             }
         tool_messages.append(
             ToolMessage(
@@ -125,18 +129,50 @@ def act_node(state):
 
 
 def hitl_check_node(state):
-    """Pause the graph when a tool result requires human approval."""
+    """Pause the graph when a tool result requires human approval.
+
+    On resume, the human decision is persisted to the domain (the approval
+    request(s) are marked and the entity is transitioned through its FSM) and a
+    note is folded back into the conversation so the model can produce a closing
+    confirmation for the user.
+    """
     if not state.get("hitl_pending"):
         return {}
-    decision = interrupt(state.get("hitl_payload", {}))
-    # Resumed: fold the human decision back into the conversation.
+    payload = state.get("hitl_payload", {})
+    decision = interrupt(payload)
     decision_text = (
         decision.get("decision") if isinstance(decision, dict) else str(decision)
     )
     reason = decision.get("reason", "") if isinstance(decision, dict) else ""
+
+    outcome = {}
+    entity_id = payload.get("entity")
+    entity_type = payload.get("entity_type") or "purchase_order"
+    if entity_id:
+        try:
+            from procurement.approval_engine import apply_decision
+
+            outcome = apply_decision(entity_type, entity_id, decision_text, reason)
+        except Exception as exc:  # noqa: BLE001 - never let persistence crash the resume
+            logger.warning("Failed to persist HITL decision for %s: %s", entity_id, exc)
+            outcome = {"error": str(exc)}
+
+    status_note = ""
+    if outcome.get("entity_status"):
+        status_note = (
+            f" {entity_type.replace('_', ' ').title()} {entity_id} is now "
+            f"'{outcome['entity_status']}'."
+        )
     note = SystemMessage(
         content=(
             f"Human approval decision recorded: {decision_text}. {reason}".strip()
+            + status_note
+            + " Give the user a brief closing confirmation of the outcome."
         )
     )
-    return {"hitl_pending": False, "hitl_payload": {}, "messages": [note]}
+    return {
+        "hitl_pending": False,
+        "hitl_payload": {},
+        "hitl_outcome": outcome,
+        "messages": [note],
+    }
