@@ -58,14 +58,6 @@ flowchart TD
 
 ---
 
-## What makes this distinctive
-
-1. **pgvector-backed policy RAG** — policy documents (spending limits, approved-vendor rules, category and sole-source rules) are embedded with Vertex AI `text-embedding-004` and retrieved by semantic similarity (HNSW cosine index) before high-stakes decisions.
-2. **Multi-tier approval state machine** — a `django-fsm` PO lifecycle plus value/category routing to manager → finance → CFO, with a parallel sole-source committee path.
-3. **Dual-agent consumer demo** — the same 10 MCP tools drive both the internal LangGraph agent and any external MCP client (e.g. Claude Desktop).
-4. **Django Admin as the operator interface** — status badges, vendor scorecards, inline approval actions, and an immutable audit ledger with a JSON viewer.
-5. **RAG-in-the-loop orchestration** — the agent retrieves policy context, chains tools, and pauses at HITL gates for approval.
-
 ## Tech stack
 
 | Layer | Technology |
@@ -123,49 +115,27 @@ Policy documents are embedded on creation (via a `post_save` signal that queues 
 
 ## Local setup
 
-Prerequisites: [`uv`](https://docs.astral.sh/uv/), a Neon PostgreSQL database with the `vector` extension, an Upstash Redis database, and a Google Cloud service account with Vertex AI access.
+Prerequisites: [`uv`](https://docs.astral.sh/uv/), a Neon PostgreSQL database with the `vector` extension enabled (`CREATE EXTENSION IF NOT EXISTS vector;`), an Upstash Redis database, and a Google Cloud service account with Vertex AI access.
 
 ```bash
-# 1. Install dependencies into a Python 3.10 environment
-uv venv --python 3.10
-uv sync
-
-# 2. Configure environment
-cp .env.example .env      # then fill in DATABASE_URL, REDIS_URL, GCP creds, DJANGO_SECRET_KEY
-
-# 3. Enable pgvector on Neon (once), in the Neon SQL editor:
-#    CREATE EXTENSION IF NOT EXISTS vector;
-
-# 4. Migrate and seed
+uv venv --python 3.10 && uv sync
+cp .env.example .env                          # fill in DATABASE_URL, REDIS_URL, GCP creds, DJANGO_SECRET_KEY
 uv run python manage.py migrate
 uv run python manage.py seed_data
 uv run python manage.py createsuperuser
-
-# 5. Embed the policy corpus (synchronous backfill)
-uv run python manage.py embed_policies --sync
-
-# 6. Run the web app
+uv run python manage.py embed_policies --sync # embed the policy corpus
 uv run python manage.py runserver
 ```
 
-Then open:
+Open `http://localhost:8000/` (landing page), `/chat/` (agent chat), `/admin/` (Django Admin), or `/api/docs/` (Swagger UI).
 
-- `http://localhost:8000/` — operations landing page
-- `http://localhost:8000/chat/` — agent chat
-- `http://localhost:8000/admin/` — Django Admin operator interface
-- `http://localhost:8000/api/docs/` — Swagger UI
-
-Run the async worker (optional, for background embedding/scoring):
+Optional async worker, for background embedding/scoring:
 
 ```bash
 uv run celery -A procuremcp worker --loglevel=info
 ```
 
 > **Shared Redis:** `REDIS_URL` points to a shared Upstash database. All Celery keys are namespaced with `global_keyprefix: 'procuremcp:'` (set in `procuremcp/celery.py`) so they never collide with other projects on the same instance.
-
-### Demo flow
-
-On the chat page, try: *"Create a purchase requisition for 500 units of MAT-STL-BLT-001 for CC-1500 (justification: production line restock). Then convert it to a purchase order with vendor VEN-00014 and route for approval."* The agent retrieves policy context, creates the requisition and purchase order, and pauses with an approval card for the CFO tier — with policy citations and each tool call shown inline. Approving or rejecting from the card updates the purchase order and approval record immediately, with the outcome reflected back in the same card.
 
 ---
 
