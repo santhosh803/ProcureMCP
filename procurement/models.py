@@ -390,3 +390,39 @@ class AuditLedger(models.Model):
 
     def __str__(self):
         return f"{self.action} on {self.entity_type}:{self.entity_id}"
+
+
+class AgentSession(models.Model):
+    """Distributed registry for LangGraph orchestrator sessions.
+
+    The LangGraph checkpointer stores the run's state; this table stores the
+    lightweight status and ownership metadata so any web/worker process can
+    look up whether a session is idle, running, or awaiting_approval.
+    """
+
+    class Status(models.TextChoices):
+        IDLE = "idle"
+        RUNNING = "running"
+        AWAITING_APPROVAL = "awaiting_approval"
+        FAILED = "failed"
+
+    session_id = models.CharField(max_length=64, primary_key=True)
+    user = models.ForeignKey(
+        "auth.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="agent_sessions",
+    )
+    status = models.CharField(
+        max_length=32, choices=Status.choices, default=Status.IDLE
+    )
+    last_message = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_activity = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-last_activity"]
+
+    def __str__(self):
+        return f"{self.session_id} [{self.status}]"

@@ -8,6 +8,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from .models import (
+    AgentSession,
     ApprovalRequest,
     AuditLedger,
     GoodsReceipt,
@@ -364,6 +365,78 @@ class ApprovalRoutingTests(TestCase):
         self.assertIn(ApprovalRequest.ApproverTier.SOLE_SOURCE_COMMITTEE, tiers)
 
 
+class ApplyDecisionTests(TestCase):
+    """The HITL decision must persist to the approval record and the PO FSM."""
+
+    def _pending_po(self, **kwargs):
+        vendor = make_vendor()
+        po = make_po(vendor, status=PurchaseOrder.Status.DRAFT, **kwargs)
+        po.submit_for_approval()
+        po.save()
+        return po
+
+    def test_approve_transitions_po_and_marks_request(self):
+        from .approval_engine import apply_decision
+
+        po = self._pending_po(total_value=Decimal("75000"))
+        result = apply_decision("purchase_order", po.po_number, "approved", "ok")
+
+        po.refresh_from_db()
+        self.assertEqual(po.status, PurchaseOrder.Status.APPROVED)
+        self.assertIsNotNone(po.approved_at)
+        self.assertTrue(result["transitioned"])
+        self.assertEqual(result["approvals_updated"], 1)
+
+        req = ApprovalRequest.objects.get(
+            entity_type="purchase_order", entity_id=po.po_number
+        )
+        self.assertEqual(req.decision, ApprovalRequest.Decision.APPROVED)
+        self.assertEqual(req.decision_reason, "ok")
+        self.assertIsNotNone(req.decided_at)
+
+    def test_reject_transitions_po_to_rejected(self):
+        from .approval_engine import apply_decision
+
+        po = self._pending_po(total_value=Decimal("75000"))
+        result = apply_decision("purchase_order", po.po_number, "rejected", "over budget")
+
+        po.refresh_from_db()
+        self.assertEqual(po.status, PurchaseOrder.Status.REJECTED)
+        self.assertTrue(result["transitioned"])
+        req = ApprovalRequest.objects.get(entity_id=po.po_number)
+        self.assertEqual(req.decision, ApprovalRequest.Decision.REJECTED)
+
+    def test_approve_resolves_both_sole_source_requests(self):
+        from .approval_engine import apply_decision
+
+        po = self._pending_po(total_value=Decimal("60000"), is_sole_source=True)
+        # Two pending requests (CFO + committee) before the decision.
+        self.assertEqual(
+            ApprovalRequest.objects.filter(
+                entity_id=po.po_number, decision=ApprovalRequest.Decision.PENDING
+            ).count(),
+            2,
+        )
+        result = apply_decision("purchase_order", po.po_number, "approved")
+        self.assertEqual(result["approvals_updated"], 2)
+        self.assertFalse(
+            ApprovalRequest.objects.filter(
+                entity_id=po.po_number, decision=ApprovalRequest.Decision.PENDING
+            ).exists()
+        )
+        po.refresh_from_db()
+        self.assertEqual(po.status, PurchaseOrder.Status.APPROVED)
+
+    def test_unsupported_decision_returns_error(self):
+        from .approval_engine import apply_decision
+
+        po = self._pending_po(total_value=Decimal("75000"))
+        result = apply_decision("purchase_order", po.po_number, "maybe")
+        self.assertIn("error", result)
+        po.refresh_from_db()
+        self.assertEqual(po.status, PurchaseOrder.Status.PENDING_APPROVAL)
+
+
 class StateMachineTests(TestCase):
     def setUp(self):
         self.vendor = make_vendor()
@@ -425,3 +498,120 @@ class StateMachineTests(TestCase):
         po.submit_for_approval(); po.save()
         po.reject(); po.save()
         self.assertEqual(po.status, PurchaseOrder.Status.REJECTED)
+
+
+class AgentSessionModelTests(TestCase):
+    def test_create_and_default_status(self):
+        s = AgentSession.objects.create(session_id="abc-123")
+        self.assertEqual(s.status, AgentSession.Status.IDLE)
+        self.assertIsNotNone(s.last_activity)
+
+    def test_status_transitions_and_ordering(self):
+        AgentSession.objects.create(session_id="s-old", status=AgentSession.Status.IDLE)
+        newer = AgentSession.objects.create(
+            session_id="s-new", status=AgentSession.Status.AWAITING_APPROVAL
+        )
+        ordering = list(AgentSession.objects.values_list("session_id", flat=True))
+        self.assertEqual(ordering[0], newer.session_id)
+
+
+class AgentEndpointAuthTests(TestCase):
+    """The agent HTTP endpoints must reject unauthenticated requests."""
+
+    def test_chat_requires_auth(self):
+        resp = self.client.post(
+            "/api/agent/chat/", data="{}", content_type="application/json"
+        )
+        self.assertEqual(resp.status_code, 401)
+
+    def test_approve_requires_auth(self):
+        resp = self.client.post(
+            "/api/agent/approve/", data="{}", content_type="application/json"
+        )
+        self.assertEqual(resp.status_code, 401)
+
+    def test_sessions_requires_auth(self):
+        resp = self.client.get("/api/agent/sessions/")
+        self.assertEqual(resp.status_code, 401)
+
+    def test_chat_page_requires_auth_and_redirects(self):
+        resp = self.client.get("/chat/")
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/admin/login/", resp["Location"])
+
+    def test_authenticated_sessions_endpoint_returns_only_owner_rows(self):
+        from django.contrib.auth import get_user_model
+
+        User = get_user_model()
+        alice = User.objects.create_user("alice", password="pw")
+        bob = User.objects.create_user("bob", password="pw")
+        AgentSession.objects.create(session_id="alice-1", user=alice)
+        AgentSession.objects.create(session_id="bob-1", user=bob)
+        AgentSession.objects.create(session_id="anon-1")
+
+        self.client.force_login(alice)
+        resp = self.client.get("/api/agent/sessions/")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(body["sessions"][0]["session_id"], "alice-1")
+
+
+class NotificationWebhookTests(TestCase):
+    def _make_approval(self):
+        return ApprovalRequest.objects.create(
+            entity_type="purchase_order",
+            entity_id="PO-TEST-001",
+            approver_tier=ApprovalRequest.ApproverTier.CFO,
+            assigned_to="cfo@procuremcp.example",
+        )
+
+    def test_logs_only_when_webhook_unset(self):
+        from unittest.mock import patch
+
+        from django.test import override_settings
+
+        approval = self._make_approval()
+        with override_settings(NOTIFICATION_WEBHOOK_URL=""):
+            with patch("procurement.tasks._post_webhook") as mock_post:
+                from procurement.tasks import send_approval_notification_task
+
+                result = send_approval_notification_task(approval.id)
+        mock_post.assert_not_called()
+        self.assertEqual(result["status"], "notified")
+        self.assertEqual(result["channel"], "log")
+
+    def test_posts_to_webhook_when_configured(self):
+        from unittest.mock import patch
+
+        from django.test import override_settings
+
+        approval = self._make_approval()
+        with override_settings(NOTIFICATION_WEBHOOK_URL="https://hooks.example.test/x"):
+            with patch("procurement.tasks._post_webhook", return_value=200) as mock_post:
+                from procurement.tasks import send_approval_notification_task
+
+                result = send_approval_notification_task(approval.id)
+        mock_post.assert_called_once()
+        url_arg, payload_arg = mock_post.call_args.args[0], mock_post.call_args.args[1]
+        self.assertEqual(url_arg, "https://hooks.example.test/x")
+        self.assertEqual(payload_arg["event"], "approval.pending")
+        self.assertEqual(payload_arg["tier"], ApprovalRequest.ApproverTier.CFO)
+        self.assertEqual(payload_arg["entity_id"], "PO-TEST-001")
+        self.assertEqual(result["channel"], "webhook")
+        self.assertEqual(result["http_status"], 200)
+
+    def test_webhook_failure_is_captured_not_raised(self):
+        from unittest.mock import patch
+        from urllib.error import URLError
+
+        from django.test import override_settings
+
+        approval = self._make_approval()
+        with override_settings(NOTIFICATION_WEBHOOK_URL="https://hooks.example.test/x"):
+            with patch("procurement.tasks._post_webhook", side_effect=URLError("boom")):
+                from procurement.tasks import send_approval_notification_task
+
+                result = send_approval_notification_task(approval.id)
+        self.assertEqual(result["status"], "webhook_failed")
+        self.assertIn("boom", result["error"])

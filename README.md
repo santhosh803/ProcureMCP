@@ -4,6 +4,8 @@
 
 The procurement domain lives in Django. Atomic procurement operations are exposed as **MCP tools**, and two independent agents consume the same tools — an internal LangGraph orchestrator and any external MCP client such as Claude Desktop — proving the MCP layer is genuinely agent-framework agnostic.
 
+![ProcureMCP agent chat demo — policy RAG, MCP tool chaining, and a human-in-the-loop approval](docs/demo.gif)
+
 ---
 
 ## Architecture
@@ -163,7 +165,7 @@ uv run celery -A procuremcp worker --loglevel=info
 
 ### Demo flow
 
-On the chat page, try: *"Create a purchase order for 500 units of MAT-STL-BLT-001 from our cheapest approved vendor."* The agent will retrieve policy context, look up the material, search and evaluate vendors, create a requisition and purchase order, and pause with an approval card for the CFO tier — with policy citations and each tool call shown inline.
+On the chat page, try: *"Create a purchase requisition for 500 units of MAT-STL-BLT-001 for CC-1500 (justification: production line restock). Then convert it to a purchase order with vendor VEN-00014 and route for approval."* The agent retrieves policy context, creates the requisition and purchase order, and pauses with an approval card for the CFO tier — with policy citations and each tool call shown inline. Approving or rejecting from the card updates the purchase order and approval record immediately, with the outcome reflected back in the same card.
 
 ---
 

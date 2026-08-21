@@ -15,6 +15,7 @@ from django.utils.html import format_html
 from django_fsm import TransitionNotAllowed
 
 from .models import (
+    AgentSession,
     ApprovalRequest,
     AuditLedger,
     GoodsReceipt,
@@ -644,4 +645,39 @@ class AuditLedgerAdmin(admin.ModelAdmin):
             '<pre style="background:#0f172a;color:#e2e8f0;padding:10px;'
             'border-radius:6px;max-height:320px;overflow:auto;">{}</pre>',
             pretty,
+        )
+
+
+@admin.register(AgentSession)
+class AgentSessionAdmin(admin.ModelAdmin):
+    list_display = ("session_id", "user", "status_badge", "last_activity")
+    list_filter = ("status",)
+    search_fields = ("session_id", "user__username", "last_message")
+    readonly_fields = (
+        "session_id",
+        "user",
+        "status",
+        "last_message",
+        "created_at",
+        "last_activity",
+    )
+    date_hierarchy = "last_activity"
+
+    def has_add_permission(self, request):
+        return False
+
+    @admin.display(description="Status")
+    def status_badge(self, obj):
+        colors = {
+            AgentSession.Status.IDLE: "#64748b",
+            AgentSession.Status.RUNNING: "#2563eb",
+            AgentSession.Status.AWAITING_APPROVAL: "#d97706",
+            AgentSession.Status.FAILED: "#dc2626",
+        }
+        color = colors.get(obj.status, "#64748b")
+        return format_html(
+            '<span style="background:{};color:#fff;padding:2px 8px;'
+            'border-radius:9999px;font-size:11px;">{}</span>',
+            color,
+            obj.get_status_display(),
         )

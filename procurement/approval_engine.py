@@ -91,3 +91,64 @@ def route_approval(entity, value, is_sole_source=False):
         )
 
     return created
+
+
+def apply_decision(entity_type, entity_id, decision, reason=""):
+    """Record a human approval decision and advance the entity's state.
+
+    Marks every still-pending :class:`ApprovalRequest` for the entity with the
+    decision (a single chat approval resolves the whole gate, including the
+    parallel sole-source committee request), then advances a
+    :class:`PurchaseOrder` through its FSM (``approve``/``reject``). Post-save
+    signals write the audit-ledger entries.
+
+    Returns a summary dict; never raises for an already-resolved or
+    wrong-state entity — it reports the current state instead.
+    """
+    from django.utils import timezone
+    from django_fsm import TransitionNotAllowed
+
+    from .models import PurchaseOrder
+
+    normalized = (decision or "").strip().lower()
+    if normalized not in {ApprovalRequest.Decision.APPROVED, ApprovalRequest.Decision.REJECTED}:
+        return {"error": f"Unsupported decision: {decision!r}"}
+
+    pending = ApprovalRequest.objects.filter(
+        entity_type=entity_type,
+        entity_id=entity_id,
+        decision=ApprovalRequest.Decision.PENDING,
+    )
+    updated = 0
+    for req in list(pending):
+        req.decision = normalized
+        req.decision_reason = reason or ""
+        req.decided_at = timezone.now()
+        req.save(update_fields=["decision", "decision_reason", "decided_at"])
+        updated += 1
+
+    entity_status = None
+    transitioned = False
+    if entity_type == "purchase_order":
+        po = PurchaseOrder.objects.filter(po_number=entity_id).first()
+        if po is not None:
+            if po.status == PurchaseOrder.Status.PENDING_APPROVAL:
+                try:
+                    if normalized == ApprovalRequest.Decision.APPROVED:
+                        po.approve()
+                    else:
+                        po.reject()
+                    po.save()
+                    transitioned = True
+                except TransitionNotAllowed:
+                    pass
+            entity_status = po.status
+
+    return {
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+        "decision": normalized,
+        "approvals_updated": updated,
+        "entity_status": entity_status,
+        "transitioned": transitioned,
+    }
