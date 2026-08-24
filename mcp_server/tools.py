@@ -124,11 +124,26 @@ def create_purchase_requisition(requester, cost_center, justification, line_item
 @tool_errors
 def search_vendors(material_group=None, min_score=0.0, region=None, limit=10):
     """Search approved vendors by material group, minimum score, and region."""
+    from django.db.models import Q
     from procurement.models import VendorMaster
 
     qs = VendorMaster.objects.all()
     if material_group:
-        qs = qs.filter(material_groups__contains=[material_group])
+        norm = str(material_group).strip().lower().replace("-", "_")
+        aliases = {norm, norm.replace("_", " "), norm.replace(" ", "_")}
+        if "raw" in norm:
+            aliases.update(["raw_materials", "raw materials", "raw_material", "raw material"])
+        if "capex" in norm or "capital" in norm or "equip" in norm:
+            aliases.update(["capex", "capital_equipment", "capital equipment"])
+        if "indirect" in norm:
+            aliases.update(["indirect", "indirect_materials", "indirect materials"])
+        if "service" in norm:
+            aliases.update(["services", "service"])
+
+        q_filter = Q()
+        for alias in aliases:
+            q_filter |= Q(material_groups__contains=[alias])
+        qs = qs.filter(q_filter)
     if min_score:
         qs = qs.filter(overall_score__gte=float(min_score))
     if region:

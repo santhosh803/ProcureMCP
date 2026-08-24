@@ -55,6 +55,23 @@ def _touch_session(thread_id, user, *, status, message=None):
         return session
 
 
+def _extract_text(content):
+    """Safely extract string content from str, list of dicts, or other structures."""
+    if not content:
+        return ""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and item.get("text"):
+                parts.append(str(item["text"]))
+        return "\n".join(parts).strip()
+    return str(content).strip()
+
+
 def _summarize_message(node, update):
     """Translate a graph state update into SSE-friendly events."""
     events = []
@@ -71,8 +88,9 @@ def _summarize_message(node, update):
                         "tool_call",
                         {"calls": [{"name": c["name"], "args": c.get("args", {})} for c in tool_calls]},
                     ))
-                if isinstance(msg.content, str) and msg.content.strip():
-                    events.append(("reasoning", {"text": msg.content}))
+                text = _extract_text(getattr(msg, "content", ""))
+                if text:
+                    events.append(("reasoning", {"text": text}))
             elif mtype == "tool":
                 try:
                     payload = json.loads(msg.content)
@@ -197,9 +215,11 @@ def agent_approve(request):
 
     final_text = ""
     for msg in reversed(result.get("messages", [])):
-        if getattr(msg, "type", "") == "ai" and isinstance(msg.content, str) and msg.content.strip():
-            final_text = msg.content
-            break
+        if getattr(msg, "type", "") == "ai":
+            text = _extract_text(getattr(msg, "content", ""))
+            if text:
+                final_text = text
+                break
 
     # The model occasionally returns an empty closing message; synthesize a
     # confirmation from the persisted decision outcome so the user always sees
