@@ -24,10 +24,10 @@
         <span class="hidden sm:inline text-xs text-slate-400 font-medium">Enterprise Procurement Platform</span>
       </a>
       <nav class="flex items-center gap-1 text-sm font-medium">
-        <a href="/" class="px-3 py-2 rounded-md hover:bg-slate-100 text-slate-600">Home</a>
-        <a href="/admin/" class="px-3 py-2 rounded-md hover:bg-slate-100 text-slate-600">Admin Dashboard</a>
-        <a href="/chat/" class="px-3 py-2 rounded-md hover:bg-slate-100 text-slate-600">Agent Chat</a>
-        <a href="/api/docs/" class="px-3 py-2 rounded-md hover:bg-slate-100 text-slate-600">API Docs</a>
+        <a href="/" class="px-3 py-2 rounded-md transition-colors {% if request.path == '/' %}bg-indigo-50 text-indigo-700 font-semibold{% else %}text-slate-600 hover:bg-slate-100 hover:text-slate-900{% endif %}">Home</a>
+        <a href="/admin/" class="px-3 py-2 rounded-md transition-colors {% if request.path|slice:':7' == '/admin/' and not '/admin/login' in request.path %}bg-indigo-50 text-indigo-700 font-semibold{% else %}text-slate-600 hover:bg-slate-100 hover:text-slate-900{% endif %}">Admin Dashboard</a>
+        <a href="/chat/" class="px-3 py-2 rounded-md transition-colors {% if request.path|slice:':6' == '/chat/' %}bg-indigo-50 text-indigo-700 font-semibold{% else %}text-slate-600 hover:bg-slate-100 hover:text-slate-900{% endif %}">Agent Chat</a>
+        <a href="/api/docs/" class="px-3 py-2 rounded-md transition-colors {% if request.path|slice:':10' == '/api/docs/' or request.path|slice:':12' == '/api/schema/' %}bg-indigo-50 text-indigo-700 font-semibold{% else %}text-slate-600 hover:bg-slate-100 hover:text-slate-900{% endif %}">API Docs</a>
         {% if user.is_authenticated %}
           <span class="ml-2 text-xs text-slate-400 hidden sm:inline">{{ user.username }}</span>
           <form action="/admin/logout/" method="post" class="inline">{% csrf_token %}
