@@ -234,7 +234,10 @@ def agent_sessions(request):
     if auth_response is not None:
         return auth_response
 
-    qs = AgentSession.objects.filter(user=request.user)
+    if request.user and request.user.is_authenticated:
+        qs = AgentSession.objects.filter(user=request.user)
+    else:
+        qs = AgentSession.objects.filter(user__isnull=True)
     return JsonResponse(
         {
             "count": qs.count(),

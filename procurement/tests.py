@@ -3,7 +3,7 @@
 from datetime import date, timedelta
 from decimal import Decimal
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -515,6 +515,7 @@ class AgentSessionModelTests(TestCase):
         self.assertEqual(ordering[0], newer.session_id)
 
 
+@override_settings(REQUIRE_API_AUTH=True)
 class AgentEndpointAuthTests(TestCase):
     """The agent HTTP endpoints must reject unauthenticated requests."""
 

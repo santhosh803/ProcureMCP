@@ -23,6 +23,41 @@ TESTING = "test" in sys.argv
 load_dotenv(BASE_DIR / ".env")
 
 
+def _install_dns_fallback():
+    """Install DNS-over-HTTPS fallback if the local OS resolver refuses subdomains."""
+    import json
+    import socket
+    import urllib.request
+
+    _orig_getaddrinfo = socket.getaddrinfo
+    _dns_cache = {}
+
+    def custom_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+        try:
+            return _orig_getaddrinfo(host, port, family, type, proto, flags)
+        except socket.gaierror:
+            if host and host not in _dns_cache:
+                try:
+                    url = f"https://dns.google/resolve?name={host}&type=A"
+                    req = urllib.request.Request(url, headers={"User-Agent": "Python-DNS-Fallback"})
+                    with urllib.request.urlopen(req, timeout=4) as resp:
+                        data = json.loads(resp.read().decode("utf-8"))
+                        for ans in data.get("Answer", []):
+                            if ans.get("type") == 1:
+                                _dns_cache[host] = ans["data"]
+                                break
+                except Exception:
+                    pass
+            if host in _dns_cache:
+                return _orig_getaddrinfo(_dns_cache[host], port, family, type, proto, flags)
+            raise
+
+    socket.getaddrinfo = custom_getaddrinfo
+
+
+_install_dns_fallback()
+
+
 def _materialize_gcp_credentials():
     """Ensure Google Cloud service-account credentials exist as a file on disk.
 
