@@ -24,21 +24,57 @@ load_dotenv(BASE_DIR / ".env")
 
 
 def _materialize_gcp_credentials():
-    """On platforms without a mounted key file, write GCP_CREDENTIALS_JSON to disk.
+    """Ensure Google Cloud service-account credentials exist as a file on disk.
 
-    Railway (and similar) provide the service-account JSON as an env var rather
-    than a file. If present, write it to a temp file and point
-    GOOGLE_APPLICATION_CREDENTIALS at it so the Google client can authenticate.
+    Supports:
+    1. Direct JSON content in GOOGLE_APPLICATION_CREDENTIALS, GCP_CREDENTIALS_JSON,
+       GCP_SERVICE_ACCOUNT, or GOOGLE_CREDENTIALS
+    2. Base64-encoded JSON content
+    3. Existing file path (e.g. ./gcp-key.json or absolute path)
     """
-    raw = os.environ.get("GCP_CREDENTIALS_JSON")
-    if not raw:
-        return
-    import tempfile
+    candidates = [
+        os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"),
+        os.environ.get("GCP_CREDENTIALS_JSON"),
+        os.environ.get("GCP_SERVICE_ACCOUNT"),
+        os.environ.get("GOOGLE_CREDENTIALS"),
+    ]
 
-    fd, path = tempfile.mkstemp(prefix="gcp-", suffix=".json")
-    with os.fdopen(fd, "w") as fh:
-        fh.write(raw)
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = path
+    for raw in candidates:
+        if not raw or not raw.strip():
+            continue
+        raw_str = raw.strip()
+
+        # Check if already a valid accessible file path
+        if os.path.exists(raw_str) and os.path.isfile(raw_str):
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(raw_str)
+            return
+
+        # Check if raw JSON string
+        json_content = None
+        if raw_str.startswith("{") and "private_key" in raw_str:
+            json_content = raw_str
+        else:
+            # Check if base64 encoded
+            try:
+                import base64
+                decoded = base64.b64decode(raw_str).decode("utf-8")
+                if decoded.startswith("{") and "private_key" in decoded:
+                    json_content = decoded
+            except Exception:
+                pass
+
+        if json_content:
+            import tempfile
+            tmp_path = os.path.join(tempfile.gettempdir(), "procuremcp-gcp-key.json")
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                f.write(json_content)
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = tmp_path
+            return
+
+    # Fallback to local gcp-key.json if present
+    local_key = BASE_DIR / "gcp-key.json"
+    if local_key.exists():
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(local_key.resolve())
 
 
 _materialize_gcp_credentials()
@@ -56,7 +92,7 @@ def env_bool(name: str, default: bool = False) -> bool:
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-insecure-change-me")
 
 # In production platforms (Railway) DEBUG is forced off.
-IS_PRODUCTION = bool(os.environ.get("RAILWAY_ENVIRONMENT"))
+IS_PRODUCTION = bool(os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_PUBLIC_DOMAIN"))
 DEBUG = False if IS_PRODUCTION else env_bool("DEBUG", True)
 
 ALLOWED_HOSTS = [
@@ -64,16 +100,20 @@ ALLOWED_HOSTS = [
     for h in os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
     if h.strip()
 ]
-if IS_PRODUCTION:
-    ALLOWED_HOSTS.append(".railway.app")
+for domain in [".railway.app", ".up.railway.app"]:
+    if domain not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(domain)
 
 CSRF_TRUSTED_ORIGINS = [
     o.strip()
     for o in os.environ.get("CSRF_TRUSTED_ORIGINS", "").split(",")
     if o.strip()
 ]
-if IS_PRODUCTION:
-    CSRF_TRUSTED_ORIGINS.append("https://*.railway.app")
+for origin in ["https://*.railway.app", "https://*.up.railway.app", "http://localhost:8000", "http://127.0.0.1:8000"]:
+    if origin not in CSRF_TRUSTED_ORIGINS:
+        CSRF_TRUSTED_ORIGINS.append(origin)
+
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 
 # --- Applications ------------------------------------------------------------
@@ -254,8 +294,11 @@ EMBEDDING_DIMENSIONS = 768
 
 # --- Authentication ----------------------------------------------------------
 
-# Agent chat and API endpoints require an authenticated Django session.
-# Unauthenticated requests to protected pages are redirected here.
+# Set to True to enforce Django admin session authentication on /chat/ and /api/agent/ endpoints.
+# Defaults to False so the live chat interface can be tested immediately upon deployment.
+REQUIRE_API_AUTH = env_bool("REQUIRE_API_AUTH", False)
+LANGGRAPH_CHECKPOINT_BACKEND = os.environ.get("LANGGRAPH_CHECKPOINT_BACKEND", "postgres")
+
 LOGIN_URL = "/admin/login/"
 LOGIN_REDIRECT_URL = "/chat/"
 

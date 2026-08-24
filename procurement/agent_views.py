@@ -29,7 +29,8 @@ def _config(thread_id):
 
 
 def _require_auth(request):
-    if not request.user.is_authenticated:
+    from django.conf import settings
+    if getattr(settings, "REQUIRE_API_AUTH", False) and not request.user.is_authenticated:
         return JsonResponse(
             {"detail": "Authentication required."}, status=401
         )

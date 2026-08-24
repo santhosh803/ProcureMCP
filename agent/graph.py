@@ -85,7 +85,8 @@ def _default_checkpointer():
     """Return the checkpointer appropriate for the current environment."""
     from django.conf import settings
 
-    if getattr(settings, "TESTING", False) or not os.environ.get("DATABASE_URL"):
+    backend = str(getattr(settings, "LANGGRAPH_CHECKPOINT_BACKEND", "postgres")).strip().lower()
+    if backend == "memory" or getattr(settings, "TESTING", False) or not os.environ.get("DATABASE_URL"):
         return MemorySaver()
     try:
         cp = _get_postgres_checkpointer()

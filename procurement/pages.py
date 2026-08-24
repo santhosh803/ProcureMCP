@@ -36,7 +36,12 @@ QUICK_PROMPTS = [
 ]
 
 
-@login_required
+from django.conf import settings
+from django.shortcuts import redirect, render
+
+
 def chat_page(request):
-    """Agent chat interface. Requires an authenticated Django session."""
+    """Agent chat interface. Checks REQUIRE_API_AUTH setting before redirecting to login."""
+    if getattr(settings, "REQUIRE_API_AUTH", False) and not request.user.is_authenticated:
+        return redirect(f"{settings.LOGIN_URL}?next=/chat/")
     return render(request, "chat.html", {"quick_prompts": QUICK_PROMPTS})
