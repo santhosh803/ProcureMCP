@@ -7,7 +7,9 @@ from drf_spectacular.views import (
     SpectacularSwaggerView,
 )
 
-from procurement import pages
+admin.site.site_header = "ProcureMCP Administration"
+admin.site.site_title = "ProcureMCP Admin"
+admin.site.index_title = "Procurement Operations & Agent Control"
 
 urlpatterns = [
     path("", pages.admin_home, name="home"),
