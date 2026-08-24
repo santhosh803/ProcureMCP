@@ -177,22 +177,67 @@
     }
   }
 
+  function thinkingIndicator(text = "Searching policies & reasoning…") {
+    const card = el(
+      "div",
+      "flex items-center gap-2.5 text-xs text-slate-500 py-2 px-3 rounded-lg bg-slate-50 border border-slate-200 agent-thinking-indicator"
+    );
+    card.innerHTML =
+      '<span class="inline-flex items-center gap-1">' +
+      '<span class="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-bounce" style="animation-delay: 0ms"></span>' +
+      '<span class="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-bounce" style="animation-delay: 150ms"></span>' +
+      '<span class="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-bounce" style="animation-delay: 300ms"></span>' +
+      '</span>' +
+      '<span class="thinking-label font-medium text-slate-600">' + text + '</span>';
+    return card;
+  }
+
+  function setThinkingText(box, text) {
+    let indicator = box.querySelector(".agent-thinking-indicator");
+    if (!indicator) {
+      indicator = thinkingIndicator(text);
+      box.appendChild(indicator);
+    } else {
+      const label = indicator.querySelector(".thinking-label");
+      if (label) label.textContent = text;
+      box.appendChild(indicator);
+    }
+    messages.scrollTop = messages.scrollHeight;
+  }
+
+  function removeThinking(box) {
+    const indicator = box.querySelector(".agent-thinking-indicator");
+    if (indicator) indicator.remove();
+  }
+
   function handleEvent(box, event, data) {
     if (event === "session") {
       sessionId = data.session_id;
     } else if (event === "policy_citations" && data.citations && data.citations.length) {
+      removeThinking(box);
       box.appendChild(policyCard(data.citations));
+      setThinkingText(box, "Evaluating policy rules & planning tool calls…");
     } else if (event === "tool_call") {
+      removeThinking(box);
       box.appendChild(toolCallCard(data.calls || []));
+      setThinkingText(box, "Executing procurement tools…");
     } else if (event === "tool_result") {
+      removeThinking(box);
       box.appendChild(toolResultCard(data.tool, data.result));
+      setThinkingText(box, "Synthesizing result & formulating response…");
     } else if (event === "reasoning" && data.text) {
+      removeThinking(box);
       box.appendChild(el("div", "text-sm text-slate-800 whitespace-pre-wrap", data.text));
     } else if (event === "hitl_pending") {
+      removeThinking(box);
       box.appendChild(hitlCard(data.payload));
     } else if (event === "error") {
+      removeThinking(box);
       box.appendChild(el("div", "text-xs text-red-600", "Error: " + (data.detail || "unknown")));
+    } else if (event === "done") {
+      removeThinking(box);
     }
+    messages.scrollTop = messages.scrollHeight;
   }
 
   async function send(message) {
@@ -201,42 +246,50 @@
     if (promptChips) promptChips.style.display = "none";
     bubble("user", message);
     const box = agentContainer();
-    box.appendChild(el("div", "text-xs text-slate-400", "Thinking&hellip;"));
+    setThinkingText(box, "Analyzing request & retrieving policies…");
     sendBtn.disabled = true;
+    sendBtn.innerHTML = '<span class="inline-flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span> Thinking…</span>';
 
-    const resp = await fetch("/api/agent/chat/", {
-      method: "POST",
-      credentials: "same-origin",
-      headers: jsonHeaders(),
-      body: JSON.stringify({ message: message, session_id: sessionId }),
-    });
-    box.firstChild.remove(); // drop the "Thinking..." placeholder
+    try {
+      const resp = await fetch("/api/agent/chat/", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: jsonHeaders(),
+        body: JSON.stringify({ message: message, session_id: sessionId }),
+      });
 
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const frames = buffer.split("\n\n");
-      buffer = frames.pop();
-      for (const frame of frames) {
-        let event = "message";
-        let dataStr = "";
-        frame.split("\n").forEach((line) => {
-          if (line.startsWith("event:")) event = line.slice(6).trim();
-          else if (line.startsWith("data:")) dataStr += line.slice(5).trim();
-        });
-        if (!dataStr) continue;
-        try {
-          handleEvent(box, event, JSON.parse(dataStr));
-        } catch (e) {
-          /* ignore malformed frame */
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop();
+        for (const frame of frames) {
+          let event = "message";
+          let dataStr = "";
+          frame.split("\n").forEach((line) => {
+            if (line.startsWith("event:")) event = line.slice(6).trim();
+            else if (line.startsWith("data:")) dataStr += line.slice(5).trim();
+          });
+          if (!dataStr) continue;
+          try {
+            handleEvent(box, event, JSON.parse(dataStr));
+          } catch (e) {
+            /* ignore malformed frame */
+          }
         }
       }
+    } catch (err) {
+      removeThinking(box);
+      box.appendChild(el("div", "text-xs text-red-600", "Connection error: " + err.message));
+    } finally {
+      removeThinking(box);
+      sendBtn.disabled = false;
+      sendBtn.textContent = "Send";
     }
-    sendBtn.disabled = false;
   }
 
   form.addEventListener("submit", (e) => {
