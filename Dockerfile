@@ -19,10 +19,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy project source code
 COPY . .
 
+# Ensure entrypoint script is executable
+RUN chmod +x entrypoint.sh
+
 # Run collectstatic during image build
 RUN python manage.py collectstatic --noinput
 
 EXPOSE 8000
 
-# Execute database migrations on container start, then boot Gunicorn with worker concurrency
-CMD ["sh", "-c", "python manage.py migrate --noinput && gunicorn procuremcp.wsgi --bind 0.0.0.0:${PORT:-8000} --workers 2 --threads 4 --timeout 120"]
+# Execute entrypoint script
+CMD ["./entrypoint.sh"]
