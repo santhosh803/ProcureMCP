@@ -173,7 +173,9 @@
     // Agent's closing message goes in its own bubble below, as before.
     if (data.final_message) {
       const box = agentContainer();
-      box.appendChild(el("div", "text-xs text-slate-600", data.final_message));
+      const textDiv = el("div", "text-sm text-slate-700 prose-chat");
+      textDiv.innerHTML = renderMarkdown(data.final_message);
+      box.appendChild(textDiv);
     }
   }
 
@@ -210,6 +212,34 @@
     if (indicator) indicator.remove();
   }
 
+  function renderMarkdown(text) {
+    if (!text) return "";
+    if (typeof marked !== "undefined" && marked.parse) {
+      try {
+        const rawHtml = marked.parse(text, { breaks: true, gfm: true });
+        if (typeof DOMPurify !== "undefined" && DOMPurify.sanitize) {
+          return DOMPurify.sanitize(rawHtml);
+        }
+        return rawHtml;
+      } catch (e) {
+        /* fallback to regex parser below */
+      }
+    }
+    // Fallback lightweight regex parser
+    let safe = text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+    safe = safe.replace(/\*\*(.*?)\*\*/g, '<strong class="font-semibold text-slate-900">$1</strong>');
+    safe = safe.replace(/__(.*?)__/g, '<strong class="font-semibold text-slate-900">$1</strong>');
+    safe = safe.replace(/(^|[^\*])\*([^\*]+)\*([^\*]|$)/g, '$1<em class="italic">$2</em>$3');
+    safe = safe.replace(/(^|[^_])_([^_]+)_([^_]|$)/g, '$1<em class="italic">$2</em>$3');
+    safe = safe.replace(/`([^`]+)`/g, '<code class="px-1.5 py-0.5 rounded bg-slate-100 text-xs font-mono text-indigo-600">$1</code>');
+    safe = safe.replace(/\n\n+/g, '</p><p class="mt-2">');
+    safe = safe.replace(/\n/g, '<br/>');
+    return '<p>' + safe + '</p>';
+  }
+
   function handleEvent(box, event, data) {
     if (event === "session") {
       sessionId = data.session_id;
@@ -227,7 +257,9 @@
       setThinkingText(box, "Synthesizing result & formulating response…");
     } else if (event === "reasoning" && data.text) {
       removeThinking(box);
-      box.appendChild(el("div", "text-sm text-slate-800 whitespace-pre-wrap", data.text));
+      const textDiv = el("div", "text-sm text-slate-800 prose-chat");
+      textDiv.innerHTML = renderMarkdown(data.text);
+      box.appendChild(textDiv);
     } else if (event === "hitl_pending") {
       removeThinking(box);
       box.appendChild(hitlCard(data.payload));

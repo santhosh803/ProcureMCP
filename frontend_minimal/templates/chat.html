@@ -4,10 +4,22 @@
 
 {% block extra_head %}
 <meta name="csrf-token" content="{{ csrf_token }}">
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
 <style>
   /* Hide horizontal scrollbar on the chip row while keeping it scrollable. */
   .chip-row { scrollbar-width: none; -ms-overflow-style: none; }
   .chip-row::-webkit-scrollbar { display: none; }
+
+  /* Rich typography styling for Markdown rendering */
+  .prose-chat p { margin-bottom: 0.5rem; line-height: 1.55; }
+  .prose-chat p:last-child { margin-bottom: 0; }
+  .prose-chat ul { list-style-type: disc; margin-left: 1.25rem; margin-top: 0.35rem; margin-bottom: 0.5rem; }
+  .prose-chat ol { list-style-type: decimal; margin-left: 1.25rem; margin-top: 0.35rem; margin-bottom: 0.5rem; }
+  .prose-chat li { margin-bottom: 0.25rem; line-height: 1.5; }
+  .prose-chat strong { font-weight: 600; color: #0f172a; }
+  .prose-chat em { font-style: italic; }
+  .prose-chat code { font-family: ui-monospace, monospace; background: #f1f5f9; color: #4338ca; padding: 0.15rem 0.35rem; border-radius: 0.25rem; font-size: 0.85em; }
 </style>
 {% endblock %}
 
