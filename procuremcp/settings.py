@@ -294,8 +294,11 @@ EMBEDDING_DIMENSIONS = 768
 
 # --- Authentication ----------------------------------------------------------
 
-# Agent chat and API endpoints require an authenticated Django session.
-# Unauthenticated requests to protected pages are redirected here.
+# Set to True to enforce Django admin session authentication on /chat/ and /api/agent/ endpoints.
+# Defaults to False so the live chat interface can be tested immediately upon deployment.
+REQUIRE_API_AUTH = env_bool("REQUIRE_API_AUTH", False)
+LANGGRAPH_CHECKPOINT_BACKEND = os.environ.get("LANGGRAPH_CHECKPOINT_BACKEND", "postgres")
+
 LOGIN_URL = "/admin/login/"
 LOGIN_REDIRECT_URL = "/chat/"
 
