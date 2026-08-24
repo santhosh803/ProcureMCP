@@ -580,24 +580,72 @@ def match_invoice_to_po(invoice_number, po_number, invoice_amount, vendor_invoic
 # ---------------------------------------------------------------------------
 
 @tool_errors
-def query_material_master(material_number):
-    """Return material specs, stock levels, reorder point, and lead time."""
+def query_material_master(material_number=None, query=None, description=None, material_group=None):
+    """Return material specs, stock levels, reorder point, and lead time.
+
+    Supports exact material_number lookup (e.g. 'MAT-STL-SHT-002'), keyword search
+    across material description / number (e.g. 'steel', 'sheet', 'packaging', 'paper'),
+    or material_group filtering ('raw_materials', 'indirect', 'capex', 'services').
+    """
+    from django.db.models import Q
     from procurement.models import Material
 
-    m = Material.objects.filter(material_number=material_number).first()
-    if m is None:
-        return {"error": f"Material not found: {material_number}"}
-    return {
-        "material_number": m.material_number,
-        "description": m.description,
-        "material_group": m.material_group,
-        "unit_of_measure": m.unit_of_measure,
-        "base_price": str(m.base_price),
-        "lead_time_days": m.lead_time_days,
-        "reorder_point": m.reorder_point,
-        "stock_qty": m.stock_qty,
-        "reorder_needed": m.stock_qty <= m.reorder_point,
-    }
+    term = material_number or query or description
+    if not term and not material_group:
+        return {"error": "Please provide a material_number, search keyword, or material_group."}
+
+    qs = Material.objects.all()
+
+    if term:
+        exact = qs.filter(material_number__iexact=str(term).strip()).first()
+        if exact:
+            return {
+                "material_number": exact.material_number,
+                "description": exact.description,
+                "material_group": exact.material_group,
+                "unit_of_measure": exact.unit_of_measure,
+                "base_price": str(exact.base_price),
+                "lead_time_days": exact.lead_time_days,
+                "reorder_point": exact.reorder_point,
+                "stock_qty": exact.stock_qty,
+                "reorder_needed": exact.stock_qty <= exact.reorder_point,
+            }
+
+        q_filter = Q(material_number__icontains=term) | Q(description__icontains=term)
+        words = [w.strip() for w in str(term).split() if len(w.strip()) > 2]
+        for w in words:
+            q_filter |= Q(description__icontains=w) | Q(material_number__icontains=w)
+        qs = qs.filter(q_filter)
+
+    if material_group:
+        norm = str(material_group).strip().lower().replace("-", "_").replace(" ", "_")
+        qs = qs.filter(material_group__icontains=norm)
+
+    qs = qs.distinct()[:10]
+    materials = [
+        {
+            "material_number": m.material_number,
+            "description": m.description,
+            "material_group": m.material_group,
+            "unit_of_measure": m.unit_of_measure,
+            "base_price": str(m.base_price),
+            "lead_time_days": m.lead_time_days,
+            "reorder_point": m.reorder_point,
+            "stock_qty": m.stock_qty,
+            "reorder_needed": m.stock_qty <= m.reorder_point,
+        }
+        for m in qs
+    ]
+
+    if not materials:
+        return {
+            "error": f"Material not found: {term or material_group}",
+            "count": 0,
+            "materials": [],
+            "message": f"No materials found matching '{term or material_group}'. Try querying with terms like 'steel', 'sheet', 'paper', 'wire', or group 'raw_materials'.",
+        }
+
+    return {"count": len(materials), "materials": materials}
 
 
 # Registry consumed by the MCP server and test scripts.
